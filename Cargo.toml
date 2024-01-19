@@ -3,9 +3,19 @@ name = "chat-server"
 version = "0.1.0"
 edition = "2021"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
-axum = "0.7.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+axum = { version = "0.7.4", features = ["macros"] }
+validator = { version = "0.14.0", features = ["derive"] }
+thiserror = "1.0.29"
+serde = { version = "1.0.195", features = ["derive"] }
+serde_json = "1.0.111"
+tokio = { version = "1.35.1", features = ["full"] }
+toml = "0.8.8"
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
+fastrand = "2.0.1"
+chrono = "0.4.31"
+anyhow = "1.0.79"
 sea-orm = "0.12.11"
-tokio = { version = "1.0", features = ["full"] }

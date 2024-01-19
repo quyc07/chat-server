@@ -1,23 +1,22 @@
+use std::collections::HashMap;
 use axum::extract::Query;
+use axum::{Form, Router};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
-use axum::{Form, Json, Router};
 use axum::routing::get;
 use serde::Deserialize;
+use tokio::net::TcpListener;
+use chat_server::user::UserApi;
 
 #[tokio::main]
 async fn main() {
-    // build our application with a route
     let app = Router::new()
-        .route("/", get(index))
+        .route("/", get(|| async { "Hello, World!" }))
+        .route("/hello", get(index))
         .route("/query", get(query))
-        .route("/form", get(show_form).post(get_form));
-    let app = app.fallback(handler_404);
-    // run it
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
-        .await
-        .unwrap();
-    println!("listening on {}", listener.local_addr().unwrap());
+        .nest("/user", UserApi::route().await);
+
+    let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
