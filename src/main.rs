@@ -6,6 +6,7 @@ use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 use serde::Deserialize;
 use tokio::net::TcpListener;
+use chat_server::app_state::AppState;
 use chat_server::user::UserApi;
 
 #[tokio::main]
@@ -15,7 +16,8 @@ async fn main() {
         .route("/hello", get(index))
         .route("/query", get(query))
         .route("/form", get(show_form).post(get_form))
-        .nest("/user", UserApi::route().await);
+        .nest("/user", UserApi::route().await)
+        ;
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();

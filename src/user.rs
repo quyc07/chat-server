@@ -1,19 +1,28 @@
 use axum::{async_trait, Json, Router};
-use axum::extract::{FromRequest, Request};
+use axum::extract::{FromRequest, Request, State};
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
+use sea_orm::EntityTrait;
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 use validator::{Validate, ValidationErrors};
 
+use crate::app_state::AppState;
+use crate::entity::prelude::User;
+use crate::entity::user;
+
 pub struct UserApi;
 
 impl UserApi {
     pub async fn route() -> Router {
-        Router::new().route("/register", post(register))
+        let app_state = AppState::new().await.unwrap();
+        Router::new()
+            .route("/register", post(register))
+            .route("/all", get(all))
+            .with_state(app_state)
     }
 }
 
@@ -31,6 +40,13 @@ struct UserRegisterReq {
 //     println!("{payload:#?}");
 //     Ok(Json(payload))
 // }
+
+async fn all(State(app_state): State<AppState>) -> Json<Vec<user::Model>> {
+    let result = user::Entity::find().all(&app_state.db().await).await;
+    let model = result.unwrap();
+    println!("{model:?}");
+    Json(model)
+}
 
 async fn register(ValidatedJson(payload): ValidatedJson<UserRegisterReq>) -> axum::response::Result<Json<UserRegisterReq>> {
     println!("{payload:#?}");
