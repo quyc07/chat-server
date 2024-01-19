@@ -14,6 +14,7 @@ async fn main() {
         .route("/", get(|| async { "Hello, World!" }))
         .route("/hello", get(index))
         .route("/query", get(query))
+        .route("/form", get(show_form).post(get_form))
         .nest("/user", UserApi::route().await);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
