@@ -1,17 +1,16 @@
-use axum::{async_trait, Json, Router};
-use axum::extract::{FromRequest, Request, State};
-use axum::extract::rejection::JsonRejection;
+use axum::{Json, Router};
+use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use sea_orm::{ActiveModelTrait, DbErr, EntityTrait, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
-use serde::de::DeserializeOwned;
 use thiserror::Error;
-use validator::{Validate, ValidationErrors};
+use validator::Validate;
 
 use crate::app_state::AppState;
 use crate::entity::user;
+use crate::err::ServerError;
+use crate::validate::ValidatedJson;
 
 pub struct UserApi;
 
@@ -34,47 +33,26 @@ struct UserRegisterReq {
     phone: Option<String>,
 }
 
-// Create our own JSON extractor by wrapping `axum::Json`. This makes it easy to override the
-// rejection and provide our own which formats errors to match our application.
-//
-// `axum::Json` responds with plain text if the input is invalid.
-#[derive(FromRequest)]
-#[from_request(via(axum::Json), rejection(UserErr))]
-struct AppJson<T>(T);
-
-impl<T> IntoResponse for AppJson<T>
-    where
-        Json<T>: IntoResponse,
-{
-    fn into_response(self) -> Response {
-        Json(self.0).into_response()
-    }
-}
 
 // The kinds of errors we can hit in our application.
-enum UserErr {
-    // The request body contained invalid JSON
-    JsonRejection(JsonRejection),
+#[derive(Debug, Error)]
+pub enum UserErr {
+    #[error("the name {0} was exist")]
     UserNameExist(String),
-    DbErr(DbErr),
 }
 
 // Tell axum how `AppError` should be converted into a response.
 //
 // This is also a convenient place to log errors.
-impl IntoResponse for UserErr {
-    fn into_response(self) -> Response {
+impl Into<(StatusCode, String)> for UserErr {
+    fn into(self) -> (StatusCode, String) {
         // How we want errors responses to be serialized
         #[derive(Serialize)]
         struct ErrorResponse {
             message: String,
         }
 
-        let (status, message) = match self {
-            UserErr::JsonRejection(rejection) => {
-                // This error is caused by bad user input so don't log it
-                (rejection.status(), rejection.body_text())
-            }
+        match self {
             UserErr::UserNameExist(name) => {
                 // Because `TraceLayer` wraps each request in a span that contains the request
                 // method, uri, etc we don't need to include those details here
@@ -92,21 +70,7 @@ impl IntoResponse for UserErr {
                     "系统异常，请稍后再试".to_string()
                 )
             }
-        };
-
-        (status, AppJson(ErrorResponse { message })).into_response()
-    }
-}
-
-impl From<JsonRejection> for UserErr {
-    fn from(rejection: JsonRejection) -> Self {
-        Self::JsonRejection(rejection)
-    }
-}
-
-impl From<DbErr> for UserErr {
-    fn from(value: DbErr) -> Self {
-        UserErr::DbErr(value)
+        }
     }
 }
 
@@ -117,7 +81,14 @@ async fn all(State(app_state): State<AppState>) -> Json<Vec<user::Model>> {
     Json(model)
 }
 
-async fn register(ValidatedJson(req): ValidatedJson<UserRegisterReq>, State(app_state): State<AppState>) -> Result<Json<user::Model>, UserErr> {
+async fn register(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJson<UserRegisterReq>) -> Result<Json<user::Model>, ServerError> {
+    if req.name.is_some() {
+        let name = req.name.as_ref().unwrap().as_str();
+        if user::Entity::find().filter(user::Column::Name.eq(name)).one(&app_state.db().await).await.unwrap().is_some() {
+            return Err(ServerError::from(UserErr::UserNameExist(name.to_string())));
+        }
+    }
+
     let user = user::ActiveModel {
         id: Default::default(),
         name: Set(req.name.unwrap()),
@@ -130,43 +101,5 @@ async fn register(ValidatedJson(req): ValidatedJson<UserRegisterReq>, State(app_
     Ok(Json(model))
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ValidatedJson<T>(pub T);
 
-#[async_trait]
-impl<T, S> FromRequest<S> for ValidatedJson<T>
-    where
-        T: DeserializeOwned + Validate,
-        S: Send + Sync,
-        Json<T>: FromRequest<S, Rejection=JsonRejection>,
-{
-    type Rejection = ServerError;
 
-    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let Json(value) = Json::<T>::from_request(req, state).await?;
-        value.validate()?;
-        Ok(ValidatedJson(value))
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum ServerError {
-    #[error(transparent)]
-    ValidationError(#[from] ValidationErrors),
-
-    #[error(transparent)]
-    AxumJsonRejection(#[from] JsonRejection),
-}
-
-impl IntoResponse for ServerError {
-    fn into_response(self) -> Response {
-        match self {
-            ServerError::ValidationError(_) => {
-                let message = format!("Input validation error: [{self}]").replace('\n', ", ");
-                (StatusCode::BAD_REQUEST, message)
-            }
-            ServerError::AxumJsonRejection(_) => (StatusCode::BAD_REQUEST, self.to_string()),
-        }
-            .into_response()
-    }
-}
