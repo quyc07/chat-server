@@ -4,6 +4,8 @@ use axum::response::{IntoResponse, Response};
 use sea_orm::DbErr;
 use thiserror::Error;
 use validator::ValidationErrors;
+use crate::AppRes;
+use crate::err::ServerError::UserErr;
 
 use crate::user::UserErr;
 
@@ -24,16 +26,16 @@ impl IntoResponse for ServerError {
         match self {
             ServerError::ValidationError(_) => {
                 let message = format!("Input validation error: [{self}]").replace('\n', ", ");
-                (StatusCode::BAD_REQUEST, message)
+                (StatusCode::BAD_REQUEST, AppRes::<()>::fail_with_msg(message).into())
             }
-            ServerError::AxumJsonRejection(_) => (StatusCode::BAD_REQUEST, self.to_string()),
-            ServerError::UserErr(err) => err.into(),
+            ServerError::AxumJsonRejection(_) => (StatusCode::BAD_REQUEST, AppRes::<()>::fail_with_msg(self.to_string()).into()),
+            ServerError::UserErr(err) => (StatusCode::OK, <UserErr as Into<String>>::err.into()),
             ServerError::DbErr(err) => {
+                // TODO 如何打印日志？
                 println!("{err}");
                 tracing::error!("db err {err}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "系统异常请稍后再试".to_string())
+                (StatusCode::INTERNAL_SERVER_ERROR, AppRes::<()>::fail().into())
             }
-        }
-            .into_response()
+        }.into_response()
     }
 }
