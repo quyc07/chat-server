@@ -2,13 +2,14 @@ use axum::{Json, Router};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use validator::Validate;
 
 use crate::app_state::AppState;
 use crate::entity::user;
+use crate::entity::user::Model;
 use crate::err::ServerError;
 use crate::validate::ValidatedJson;
 
@@ -84,7 +85,8 @@ async fn all(State(app_state): State<AppState>) -> Json<Vec<user::Model>> {
 async fn register(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJson<UserRegisterReq>) -> Result<Json<user::Model>, ServerError> {
     if req.name.is_some() {
         let name = req.name.as_ref().unwrap().as_str();
-        if user::Entity::find().filter(user::Column::Name.eq(name)).one(&app_state.db().await).await.unwrap().is_some() {
+        let result = find_by_name(&app_state, name).await;
+        if result.unwrap().is_some() {
             return Err(ServerError::from(UserErr::UserNameExist(name.to_string())));
         }
     }
@@ -99,6 +101,10 @@ async fn register(State(app_state): State<AppState>, ValidatedJson(req): Validat
     };
     let model = user.insert(&app_state.db().await).await?;
     Ok(Json(model))
+}
+
+async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<Model>, DbErr> {
+    user::Entity::find().filter(user::Column::Name.eq(name)).one(&app_state.db().await).await
 }
 
 

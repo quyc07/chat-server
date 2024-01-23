@@ -29,6 +29,7 @@ impl IntoResponse for ServerError {
             ServerError::AxumJsonRejection(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ServerError::UserErr(err) => err.into(),
             ServerError::DbErr(err) => {
+                println!("{err}");
                 tracing::error!("db err {err}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "系统异常请稍后再试".to_string())
             }
