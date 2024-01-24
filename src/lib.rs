@@ -25,8 +25,8 @@ pub struct AppRes<T: Serialize> {
     data: T,
 }
 
-const FAIL_MESSAGE: String = "系统异常请稍后再试".to_string();
-const SUCCESS_MESSAGE: String = "操作成功".to_string();
+const FAIL_MESSAGE: &str = "系统异常请稍后再试";
+const SUCCESS_MESSAGE: &str = "操作成功";
 const FAIL_CODE: i8 = 1;
 const SUCCESS_CODE: i8 = 0;
 
@@ -34,7 +34,7 @@ impl<T: Serialize> AppRes<T> {
     pub fn success(data: T) -> AppRes<T> {
         AppRes {
             code: SUCCESS_CODE,
-            msg: SUCCESS_MESSAGE,
+            msg: SUCCESS_MESSAGE.to_string(),
             data,
         }
     }
@@ -49,7 +49,7 @@ impl<T: Serialize> AppRes<T> {
     pub fn fail() -> AppRes<()> {
         AppRes {
             code: FAIL_CODE,
-            msg: FAIL_MESSAGE,
+            msg: FAIL_MESSAGE.to_string(),
             data: (),
         }
     }

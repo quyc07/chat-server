@@ -74,7 +74,8 @@ async fn register(State(app_state): State<AppState>, ValidatedJson(req): Validat
 
     let user = user::ActiveModel {
         id: Default::default(),
-        name: Set(req.name.unwrap()),
+        name: Set(req.name),
+        password: Set(req.password),
         email: Set(req.email),
         phone: Set(req.phone),
         create_time: Default::default(),

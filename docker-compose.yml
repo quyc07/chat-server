@@ -7,7 +7,7 @@ services:
     ports:
       - 3306:3306
     volumes:
-      - /mnt/d/volume/mysql:/var/lib/mysql
+      - D:\volume\mysql:/var/lib/mysql
     environment:
       MYSQL_ROOT_PASSWORD: Aa123456
       TZ: Asia/Shanghai
