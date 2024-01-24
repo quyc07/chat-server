@@ -1,13 +1,13 @@
-use axum::{Json, Router};
 use axum::extract::State;
+use axum::Router;
 use axum::routing::{get, post};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use validator::Validate;
 
+use crate::{AppRes, Res};
 use crate::app_state::AppState;
-use crate::AppRes;
 use crate::entity::user;
 use crate::err::ServerError;
 use crate::validate::ValidatedJson;
@@ -34,7 +34,6 @@ struct UserRegisterReq {
 }
 
 
-// The kinds of errors we can hit in our application.
 #[derive(Debug, Error)]
 pub enum UserErr {
     #[error("the name {0} was exist")]
@@ -56,14 +55,14 @@ impl Into<String> for UserErr {
     }
 }
 
-async fn all(State(app_state): State<AppState>) -> AppRes<Vec<user::Model>> {
+async fn all(State(app_state): State<AppState>) -> Res<Vec<user::Model>> {
     let result = user::Entity::find().all(&app_state.db().await).await;
     let model = result.unwrap();
     println!("{model:?}");
-    AppRes::success(model)
+    Ok(AppRes::success(model))
 }
 
-async fn register(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJson<UserRegisterReq>) -> Result<Json<user::Model>, ServerError> {
+async fn register(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJson<UserRegisterReq>) -> Res<user::Model> {
     if req.name.is_some() {
         let name = req.name.as_ref().unwrap().as_str();
         let result = find_by_name(&app_state, name).await;
@@ -82,7 +81,7 @@ async fn register(State(app_state): State<AppState>, ValidatedJson(req): Validat
         update_time: Default::default(),
     };
     let model = user.insert(&app_state.db().await).await?;
-    Ok(Json(model))
+    Ok(AppRes::success(model))
 }
 
 async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::Model>, DbErr> {

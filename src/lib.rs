@@ -3,6 +3,7 @@ use axum::extract::FromRequest;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
+use crate::err::ServerError;
 
 pub mod user;
 pub mod entity;
@@ -30,6 +31,8 @@ const SUCCESS_MESSAGE: &str = "操作成功";
 const FAIL_CODE: i8 = 1;
 const SUCCESS_CODE: i8 = 0;
 
+type Res<T> = Result<AppRes<T>, ServerError>;
+
 impl<T: Serialize> AppRes<T> {
     pub fn success(data: T) -> AppRes<T> {
         AppRes {
@@ -38,7 +41,9 @@ impl<T: Serialize> AppRes<T> {
             data,
         }
     }
+}
 
+impl AppRes<()> {
     pub fn fail_with_msg(msg: String) -> AppRes<()> {
         AppRes {
             code: FAIL_CODE,
@@ -57,7 +62,7 @@ impl<T: Serialize> AppRes<T> {
 
 impl<T: Serialize> IntoResponse for AppRes<T> {
     fn into_response(self) -> Response {
-        (StatusCode::OK, self).into_response()
+        (StatusCode::OK, String::from(self)).into_response()
     }
 }
 
