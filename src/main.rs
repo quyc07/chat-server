@@ -3,6 +3,7 @@ use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;
+use log::info;
 use serde::Deserialize;
 use tokio::net::TcpListener;
 
@@ -11,6 +12,8 @@ use chat_server::user::UserApi;
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+    info!("chat server start begin!");
     let app_state = AppState::new().await.unwrap();
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
@@ -21,6 +24,7 @@ async fn main() {
         ;
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    info!("chat server started!");
     axum::serve(listener, app).await.unwrap();
 }
 

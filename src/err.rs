@@ -1,6 +1,7 @@
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use log::{error, warn};
 use sea_orm::DbErr;
 use thiserror::Error;
 use validator::ValidationErrors;
@@ -27,12 +28,13 @@ impl IntoResponse for ServerError {
                 let message = format!("Input validation error: [{self}]").replace('\n', ", ");
                 (StatusCode::BAD_REQUEST, String::from(AppRes::fail_with_msg(message)))
             }
-            ServerError::AxumJsonRejection(_) => (StatusCode::BAD_REQUEST, String::from(AppRes::fail_with_msg(self.to_string()))),
+            ServerError::AxumJsonRejection(ref err) => {
+                warn!("json parse err: {err}");
+                (StatusCode::BAD_REQUEST, String::from(AppRes::fail_with_msg(self.to_string())))
+            }
             ServerError::UserErr(err) => (StatusCode::OK, err.into()),
             ServerError::DbErr(err) => {
-                // TODO 如何打印日志？
-                println!("{err}");
-                tracing::error!("db err {err}");
+                error!("db error happened {err}");
                 (StatusCode::INTERNAL_SERVER_ERROR, String::from(AppRes::fail()))
             }
         }.into_response()

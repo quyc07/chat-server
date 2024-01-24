@@ -1,6 +1,7 @@
 use axum::extract::State;
 use axum::Router;
 use axum::routing::{get, post};
+use log::info;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -58,7 +59,7 @@ impl Into<String> for UserErr {
 async fn all(State(app_state): State<AppState>) -> Res<Vec<user::Model>> {
     let result = user::Entity::find().all(&app_state.db().await).await;
     let model = result.unwrap();
-    println!("{model:?}");
+    info!("{model:?}");
     Ok(AppRes::success(model))
 }
 
