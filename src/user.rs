@@ -1,10 +1,10 @@
 use axum::extract::State;
 use axum::Router;
 use axum::routing::{get, post};
-use log::info;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::log::info;
 use validator::Validate;
 
 use crate::{AppRes, Res};

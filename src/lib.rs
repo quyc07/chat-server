@@ -1,8 +1,10 @@
 use std::string::ToString;
+
 use axum::extract::FromRequest;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+
 use crate::err::ServerError;
 
 pub mod user;
