@@ -9,6 +9,7 @@ use validator::Validate;
 
 use crate::{AppRes, Res};
 use crate::app_state::AppState;
+use crate::entity::prelude::User;
 use crate::entity::user;
 use crate::err::ServerError;
 use crate::validate::ValidatedJson;
@@ -57,7 +58,7 @@ impl Into<String> for UserErr {
 }
 
 async fn all(State(app_state): State<AppState>) -> Res<Vec<user::Model>> {
-    let result = user::Entity::find().all(&app_state.db().await).await;
+    let result = User::find().all(&app_state.db().await).await;
     let model = result.unwrap();
     info!("{model:?}");
     Ok(AppRes::success(model))
@@ -86,7 +87,7 @@ async fn register(State(app_state): State<AppState>, ValidatedJson(req): Validat
 }
 
 async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::Model>, DbErr> {
-    user::Entity::find().filter(user::Column::Name.eq(name)).one(&app_state.db().await).await
+    User::find().filter(user::Column::Name.eq(name)).one(&app_state.db().await).await
 }
 
 
