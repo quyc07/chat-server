@@ -1,10 +1,11 @@
 use axum::extract::State;
 use axum::Router;
 use axum::routing::{get, post};
+use color_eyre::eyre::eyre;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::info;
+use tracing::error;
 use validator::Validate;
 
 use crate::{AppRes, Res};
@@ -40,6 +41,21 @@ struct UserRegisterReq {
 pub enum UserErr {
     #[error("用户名 {0} 已存在")]
     UserNameExist(String),
+}
+
+impl ErrPrint for UserErr {
+    fn print(&self) {
+        match self {
+            UserErr::UserNameExist(_) => {
+                let report = eyre!(self.to_string());
+                error!(?report);
+            }
+        }
+    }
+}
+
+pub trait ErrPrint {
+    fn print(&self);
 }
 
 impl Into<String> for UserErr {

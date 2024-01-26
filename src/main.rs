@@ -1,9 +1,7 @@
 use axum::Router;
 use axum::routing::get;
-use color_eyre::eyre::eyre;
 use tokio::net::TcpListener;
-use tracing::instrument;
-use tracing::{error, info};
+use tracing::info;
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;

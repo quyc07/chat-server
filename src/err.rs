@@ -8,7 +8,7 @@ use tracing::{error, warn};
 use validator::ValidationErrors;
 
 use crate::AppRes;
-use crate::user::UserErr;
+use crate::user::{ErrPrint, UserErr};
 
 #[derive(Debug, Error)]
 pub enum ServerError {
@@ -34,9 +34,9 @@ impl IntoResponse for ServerError {
                 (StatusCode::BAD_REQUEST, String::from(AppRes::fail_with_msg(self.to_string())))
             }
             ServerError::UserErr(err) => {
-
+                err.print();
                 (StatusCode::OK, err.into())
-            },
+            }
             ServerError::DbErr(err) => {
                 let report = eyre!("db error happened: {err}");
                 error!(?report);
