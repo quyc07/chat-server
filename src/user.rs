@@ -38,15 +38,15 @@ struct UserRegisterReq {
 
 #[derive(Debug, Error)]
 pub enum UserErr {
-    #[error("the name {0} was exist")]
+    #[error("用户名 {0} 已存在")]
     UserNameExist(String),
 }
 
 impl Into<String> for UserErr {
     fn into(self) -> String {
         match self {
-            UserErr::UserNameExist(name) => {
-                AppRes::<()>::fail_with_msg(format!("用户名{name}已存在")).into()
+            UserErr::UserNameExist(_) => {
+                AppRes::<()>::fail_with_msg(self.to_string()).into()
             }
         }
     }
