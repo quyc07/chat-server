@@ -46,11 +46,6 @@ impl Into<String> for UserErr {
     fn into(self) -> String {
         match self {
             UserErr::UserNameExist(name) => {
-                // Because `TraceLayer` wraps each request in a span that contains the request
-                // method, uri, etc we don't need to include those details here
-                tracing::error!("error from user_name {name} exist");
-
-                // Don't expose any details about the error to the client
                 AppRes::<()>::fail_with_msg(format!("用户名{name}已存在")).into()
             }
         }
@@ -60,7 +55,6 @@ impl Into<String> for UserErr {
 async fn all(State(app_state): State<AppState>) -> Res<Vec<user::Model>> {
     let result = User::find().all(&app_state.db().await).await;
     let model = result.unwrap();
-    info!("{model:?}");
     Ok(AppRes::success(model))
 }
 

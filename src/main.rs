@@ -15,10 +15,8 @@ use chat_server::user::UserApi;
 
 #[tokio::main]
 async fn main() {
-    // log_init().await;
     log_init_non_block().await;
     color_eyre::install().unwrap();
-    call_return_err();
     info!("chat server start begin!");
     let app_state = AppState::new().await.unwrap();
     let app = Router::new()
@@ -62,20 +60,6 @@ async fn log_init() {
     // //     .init()
 }
 
-#[instrument]
-fn return_err() -> color_eyre::Result<()> {
-    Err(eyre!("Something went wrong"))
-}
-
-#[instrument]
-fn call_return_err() {
-    info!("going to log error");
-    if let Err(err) = return_err() {
-        // 推荐大家运行下，看看这里的输出效果
-        error!(?err, "error");
-    }
-}
-
 async fn log_init_non_block() {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     // 输出到控制台中
@@ -91,8 +75,6 @@ async fn log_init_non_block() {
     // 注册
     tracing_subscriber::Registry::default()
         .with(env_filter)
-        // ErrorLayer 可以让 color-eyre 获取到 span 的信息
-        // .with(tracing_error::ErrorLayer::default())
         .with(formatting_layer)
         .with(file_layer)
         .init();

@@ -30,13 +30,16 @@ impl IntoResponse for ServerError {
                 (StatusCode::BAD_REQUEST, String::from(AppRes::fail_with_msg(message)))
             }
             ServerError::AxumJsonRejection(ref err) => {
-                let report = eyre!("db error happened {err}");
-                error!(?report);
+                warn!("request json parse err: {err}");
                 (StatusCode::BAD_REQUEST, String::from(AppRes::fail_with_msg(self.to_string())))
             }
-            ServerError::UserErr(err) => (StatusCode::OK, err.into()),
+            ServerError::UserErr(err) => {
+
+                (StatusCode::OK, err.into())
+            },
             ServerError::DbErr(err) => {
-                error!("db error happened {err}");
+                let report = eyre!("db error happened: {err}");
+                error!(?report);
                 (StatusCode::INTERNAL_SERVER_ERROR, String::from(AppRes::fail()))
             }
         }.into_response()
