@@ -1,6 +1,7 @@
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use color_eyre::eyre::eyre;
 use sea_orm::DbErr;
 use thiserror::Error;
 use tracing::{error, warn};
@@ -29,7 +30,8 @@ impl IntoResponse for ServerError {
                 (StatusCode::BAD_REQUEST, String::from(AppRes::fail_with_msg(message)))
             }
             ServerError::AxumJsonRejection(ref err) => {
-                warn!("json parse err: {err}");
+                let report = eyre!("db error happened {err}");
+                error!(?report);
                 (StatusCode::BAD_REQUEST, String::from(AppRes::fail_with_msg(self.to_string())))
             }
             ServerError::UserErr(err) => (StatusCode::OK, err.into()),
