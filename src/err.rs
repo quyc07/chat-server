@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use sea_orm::DbErr;
 use thiserror::Error;
-use tracing::log::{error, warn};
+use tracing::{error, warn};
 use validator::ValidationErrors;
 
 use crate::AppRes;

@@ -1,9 +1,13 @@
 use axum::Router;
 use axum::routing::get;
+use color_eyre::eyre::eyre;
 use tokio::net::TcpListener;
-use tracing::log::info;
+use tracing::instrument;
+use tracing::{error, info};
 use tracing_appender::rolling;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use chat_server::app_state::AppState;
@@ -11,7 +15,10 @@ use chat_server::user::UserApi;
 
 #[tokio::main]
 async fn main() {
-    log_init().await;
+    // log_init().await;
+    log_init_non_block().await;
+    color_eyre::install().unwrap();
+    call_return_err();
     info!("chat server start begin!");
     let app_state = AppState::new().await.unwrap();
     let app = Router::new()
@@ -53,4 +60,40 @@ async fn log_init() {
     // //     .with(env_filter)
     // //     .with(console_layer)
     // //     .init()
+}
+
+#[instrument]
+fn return_err() -> color_eyre::Result<()> {
+    Err(eyre!("Something went wrong"))
+}
+
+#[instrument]
+fn call_return_err() {
+    info!("going to log error");
+    if let Err(err) = return_err() {
+        // 推荐大家运行下，看看这里的输出效果
+        error!(?err, "error");
+    }
+}
+
+async fn log_init_non_block() {
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // 输出到控制台中
+    let formatting_layer = tracing_subscriber::fmt::layer().pretty().with_writer(std::io::stderr);
+
+    // 输出到文件中
+    let file_appender = rolling::never("logs", "app.log");
+    // let (non_blocking_appender, _guard) = tracing_appender::non_blocking(file_appender);
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(file_appender);
+
+    // 注册
+    tracing_subscriber::Registry::default()
+        .with(env_filter)
+        // ErrorLayer 可以让 color-eyre 获取到 span 的信息
+        // .with(tracing_error::ErrorLayer::default())
+        .with(formatting_layer)
+        .with(file_layer)
+        .init();
 }

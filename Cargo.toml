@@ -16,6 +16,7 @@ toml = "0.8.8"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 tracing-appender = "0.2.3"
+color-eyre = "0.6"
 fastrand = "2.0.1"
 chrono = "0.4.31"
 anyhow = "1.0.79"

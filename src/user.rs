@@ -4,7 +4,7 @@ use axum::routing::{get, post};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::log::info;
+use tracing::info;
 use validator::Validate;
 
 use crate::{AppRes, Res};
