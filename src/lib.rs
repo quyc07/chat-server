@@ -12,6 +12,7 @@ pub mod entity;
 pub mod app_state;
 pub mod err;
 pub mod validate;
+pub mod log;
 
 // Create our own JSON extractor by wrapping `axum::Json`. This makes it easy to override the
 // rejection and provide our own which formats errors to match our application.
