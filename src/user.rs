@@ -12,7 +12,7 @@ use crate::{AppRes, Res};
 use crate::app_state::AppState;
 use crate::entity::prelude::User;
 use crate::entity::user;
-use crate::err::ServerError;
+use crate::err::{ErrPrint, ServerError};
 use crate::validate::ValidatedJson;
 
 pub struct UserApi;
@@ -52,10 +52,6 @@ impl ErrPrint for UserErr {
             }
         }
     }
-}
-
-pub trait ErrPrint {
-    fn print(&self);
 }
 
 impl Into<String> for UserErr {

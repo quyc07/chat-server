@@ -8,7 +8,7 @@ use tracing::{error, warn};
 use validator::ValidationErrors;
 
 use crate::AppRes;
-use crate::user::{ErrPrint, UserErr};
+use crate::user::UserErr;
 
 #[derive(Debug, Error)]
 pub enum ServerError {
@@ -44,4 +44,8 @@ impl IntoResponse for ServerError {
             }
         }.into_response()
     }
+}
+
+pub trait ErrPrint {
+    fn print(&self);
 }
