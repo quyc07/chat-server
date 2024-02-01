@@ -11,3 +11,12 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: Aa123456
       TZ: Asia/Shanghai
+  nginx:
+    image: nginx:latest
+    container_name: web
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - D:\volume\nginx\nginx.conf:/etc/nginx/nginx.conf
+      - D:\https:/opt/nginx/ssl_key
