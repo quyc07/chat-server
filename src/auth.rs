@@ -12,6 +12,9 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
+use crate::AppRes;
+use crate::err::ErrPrint;
+use crate::user::UserErr;
 
 pub static KEYS: Lazy<Keys> = Lazy::new(|| {
     let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
@@ -135,4 +138,12 @@ pub enum AuthError {
     TokenCreation,
     #[error("InvalidToken")]
     InvalidToken,
+}
+
+impl ErrPrint for AuthError {}
+
+impl From<AuthError> for String {
+    fn from(err: AuthError) -> Self {
+        AppRes::fail_with_msg(err.to_string()).into()
+    }
 }

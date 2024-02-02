@@ -36,24 +36,26 @@ impl IntoResponse for ServerError {
                 warn!("request json parse err: {err}");
                 (StatusCode::BAD_REQUEST, String::from(AppRes::fail_with_msg(self.to_string())))
             }
-            ServerError::UserErr(err) => {
-                err.print();
-                (StatusCode::OK, err.into())
-            }
             ServerError::DbErr(err) => {
                 let report = eyre!("db error happened: {err}");
                 error!(?report);
                 (StatusCode::INTERNAL_SERVER_ERROR, String::from(AppRes::fail()))
             }
+            ServerError::UserErr(err) => {
+                err.print();
+                (StatusCode::OK, err.into())
+            }
             ServerError::AuthErr(err) => {
-                let report = eyre!("auth error happened: {err}");
-                error!(?report);
-                (StatusCode::INTERNAL_SERVER_ERROR, String::from(AppRes::fail()))
+                err.print();
+                (StatusCode::OK, err.into())
             }
         }.into_response()
     }
 }
 
-pub trait ErrPrint {
-    fn print(&self);
+pub trait ErrPrint: std::fmt::Display {
+    fn print(&self) {
+        let report = eyre!(self.to_string());
+        error!(?report);
+    }
 }

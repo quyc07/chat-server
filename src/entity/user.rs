@@ -8,10 +8,10 @@ use serde::Serialize;
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    pub name: Option<String>,
-    pub password: String,
+    pub name: String,
     pub email: String,
     pub phone: Option<String>,
+    pub password: String,
     pub create_time: DateTime,
     pub update_time: Option<DateTime>,
 }

@@ -31,9 +31,9 @@ impl UserApi {
 
 #[derive(Debug, Deserialize, Validate)]
 struct UserRegisterReq {
-    #[validate(required)]
-    name: Option<String>,
-    #[validate(length(min = 10))]
+    // #[validate(custom = "check_name")]
+    name: String,
+    #[validate(email)]
     email: String,
     password: String,
     phone: Option<String>,
@@ -46,24 +46,11 @@ pub enum UserErr {
     UserNameExist(String),
 }
 
-impl ErrPrint for UserErr {
-    fn print(&self) {
-        match self {
-            UserErr::UserNameExist(_) => {
-                let report = eyre!(self.to_string());
-                error!(?report);
-            }
-        }
-    }
-}
+impl ErrPrint for UserErr {}
 
 impl Into<String> for UserErr {
     fn into(self) -> String {
-        match self {
-            UserErr::UserNameExist(_) => {
-                AppRes::<()>::fail_with_msg(self.to_string()).into()
-            }
-        }
+        AppRes::<()>::fail_with_msg(self.to_string()).into()
     }
 }
 
@@ -74,12 +61,10 @@ async fn all(State(app_state): State<AppState>) -> Res<Vec<user::Model>> {
 }
 
 async fn register(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJson<UserRegisterReq>) -> Res<user::Model> {
-    if req.name.is_some() {
-        let name = req.name.as_ref().unwrap().as_str();
-        let result = find_by_name(&app_state, name).await;
-        if result.unwrap().is_some() {
-            return Err(ServerError::from(UserErr::UserNameExist(name.to_string())));
-        }
+    let name = req.name.as_str();
+    let result = find_by_name(&app_state, name).await;
+    if result.unwrap().is_some() {
+        return Err(ServerError::from(UserErr::UserNameExist(name.to_string())));
     }
 
     let user = user::ActiveModel {
