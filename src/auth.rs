@@ -1,5 +1,6 @@
 use std::fmt::Display;
-use axum::{async_trait, Json, RequestPartsExt};
+
+use axum::{async_trait, RequestPartsExt};
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -7,48 +8,18 @@ use axum::response::{IntoResponse, Response};
 use axum_extra::headers::Authorization;
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::TypedHeader;
-use jsonwebtoken::{decode, DecodingKey, encode, EncodingKey, Header, Validation};
+use jsonwebtoken::{decode, DecodingKey, EncodingKey, Validation};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use thiserror::Error;
+
 use crate::AppRes;
-use crate::err::ErrPrint;
-use crate::user::UserErr;
+use crate::err::{ErrPrint, ServerError};
 
 pub static KEYS: Lazy<Keys> = Lazy::new(|| {
-    let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+    let secret = std::env::var("JWT_SECRET").expect("jwt_token");
     Keys::new(secret.as_bytes())
 });
-
-async fn authorize(Json(payload): Json<AuthPayload>) -> Result<Json<AuthBody>, AuthError> {
-    // Check if the user sent the credentials
-    if payload.client_id.is_empty() || payload.client_secret.is_empty() {
-        return Err(AuthError::MissingCredentials);
-    }
-    // Here you can check the user credentials from a database
-    if payload.client_id != "foo" || payload.client_secret != "bar" {
-        return Err(AuthError::WrongCredentials);
-    }
-    let claims = Claims {
-        sub: "b@b.com".to_owned(),
-        company: "ACME".to_owned(),
-        // Mandatory expiry time as UTC timestamp
-        exp: 2000000000, // May 2033
-    };
-    // Create the authorization token
-    let token = encode(&Header::default(), &claims, &KEYS.encoding)
-        .map_err(|_| AuthError::TokenCreation)?;
-
-    // Send the authorized token
-    Ok(Json(AuthBody::new(token)))
-}
-
-impl Display for Claims {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Email: {}\nCompany: {}", self.sub, self.company)
-    }
-}
 
 impl AuthBody {
     fn new(access_token: String) -> Self {
@@ -64,7 +35,7 @@ impl<S> FromRequestParts<S> for Claims
     where
         S: Send + Sync,
 {
-    type Rejection = AuthError;
+    type Rejection = ServerError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         // Extract the token from the authorization header
@@ -77,21 +48,6 @@ impl<S> FromRequestParts<S> for Claims
             .map_err(|_| AuthError::InvalidToken)?;
 
         Ok(token_data.claims)
-    }
-}
-
-impl IntoResponse for AuthError {
-    fn into_response(self) -> Response {
-        let (status, error_message) = match self {
-            AuthError::WrongCredentials => (StatusCode::UNAUTHORIZED, "Wrong credentials"),
-            AuthError::MissingCredentials => (StatusCode::BAD_REQUEST, "Missing credentials"),
-            AuthError::TokenCreation => (StatusCode::INTERNAL_SERVER_ERROR, "Token creation error"),
-            AuthError::InvalidToken => (StatusCode::BAD_REQUEST, "Invalid token"),
-        };
-        let body = Json(json!({
-            "error": error_message,
-        }));
-        (status, body).into_response()
     }
 }
 
@@ -132,11 +88,11 @@ struct AuthPayload {
 pub enum AuthError {
     #[error("用户名或密码错误")]
     WrongCredentials,
-    #[error("MissingCredentials")]
+    #[error("登录参数丢失")]
     MissingCredentials,
-    #[error("TokenCreation")]
+    #[error("Token创建失败")]
     TokenCreation,
-    #[error("InvalidToken")]
+    #[error("无效的Token")]
     InvalidToken,
 }
 

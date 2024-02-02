@@ -1,13 +1,12 @@
 use axum::extract::State;
 use axum::Router;
 use axum::routing::{get, post};
-use color_eyre::eyre::eyre;
 use jsonwebtoken::{encode, Header};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
-use validator::Validate;
+use validator::{Validate, ValidateArgs};
 
 use crate::{AppRes, Res};
 use crate::app_state::AppState;
@@ -31,10 +30,11 @@ impl UserApi {
 
 #[derive(Debug, Deserialize, Validate)]
 struct UserRegisterReq {
-    // #[validate(custom = "check_name")]
+    #[validate(length(min = 1))]
     name: String,
     #[validate(email)]
     email: String,
+    #[validate(length(min = 1))]
     password: String,
     phone: Option<String>,
 }
@@ -62,8 +62,7 @@ async fn all(State(app_state): State<AppState>) -> Res<Vec<user::Model>> {
 
 async fn register(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJson<UserRegisterReq>) -> Res<user::Model> {
     let name = req.name.as_str();
-    let result = find_by_name(&app_state, name).await;
-    if result.unwrap().is_some() {
+    if find_by_name(&app_state, name).await?.is_some() {
         return Err(ServerError::from(UserErr::UserNameExist(name.to_string())));
     }
 
