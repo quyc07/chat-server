@@ -2,6 +2,7 @@ use axum::extract::State;
 use axum::Router;
 use axum::routing::{get, post};
 use color_eyre::eyre::eyre;
+use jsonwebtoken::{encode, Header};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -10,6 +11,7 @@ use validator::Validate;
 
 use crate::{AppRes, Res};
 use crate::app_state::AppState;
+use crate::auth::{AuthError, KEYS};
 use crate::entity::prelude::User;
 use crate::entity::user;
 use crate::err::{ErrPrint, ServerError};
@@ -22,11 +24,12 @@ impl UserApi {
         Router::new()
             .route("/register", post(register))
             .route("/all", get(all))
+            .route("/login", post(login))
             .with_state(app_state)
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Validate)]
+#[derive(Debug, Deserialize, Validate)]
 struct UserRegisterReq {
     #[validate(required)]
     name: Option<String>,
@@ -91,6 +94,34 @@ async fn register(State(app_state): State<AppState>, ValidatedJson(req): Validat
     let model = user.insert(&app_state.db().await).await?;
     Ok(AppRes::success(model))
 }
+
+async fn login(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJson<UserLoginReq>) -> Res<UserLoginRes> {
+    if req.name != "andy" && req.password != "123" {
+        return Err(ServerError::from(AuthError::WrongCredentials));
+    }
+    let user = find_by_name(&app_state, &req.name).await.unwrap().unwrap();
+    // Create the authorization token
+    let token = encode(&Header::default(), &user, &KEYS.encoding)
+        .map_err(|_| AuthError::TokenCreation)?;
+
+    // Send the authorized token
+    Ok(AppRes::success(UserLoginRes { access_token: token, token_type: "Bearer".to_string() }))
+}
+
+#[derive(Debug, Deserialize, Validate)]
+struct UserLoginReq {
+    #[validate(length(min = 1))]
+    name: String,
+    #[validate(length(min = 1))]
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UserLoginRes {
+    access_token: String,
+    token_type: String,
+}
+
 
 async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::Model>, DbErr> {
     User::find().filter(user::Column::Name.eq(name)).one(&app_state.db().await).await

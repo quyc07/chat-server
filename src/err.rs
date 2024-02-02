@@ -8,6 +8,7 @@ use tracing::{error, warn};
 use validator::ValidationErrors;
 
 use crate::AppRes;
+use crate::auth::AuthError;
 use crate::user::UserErr;
 
 #[derive(Debug, Error)]
@@ -20,6 +21,8 @@ pub enum ServerError {
     UserErr(#[from] UserErr),
     #[error(transparent)]
     DbErr(#[from] DbErr),
+    #[error(transparent)]
+    AuthErr(#[from] AuthError),
 }
 
 impl IntoResponse for ServerError {
@@ -39,6 +42,11 @@ impl IntoResponse for ServerError {
             }
             ServerError::DbErr(err) => {
                 let report = eyre!("db error happened: {err}");
+                error!(?report);
+                (StatusCode::INTERNAL_SERVER_ERROR, String::from(AppRes::fail()))
+            }
+            ServerError::AuthErr(err) => {
+                let report = eyre!("auth error happened: {err}");
                 error!(?report);
                 (StatusCode::INTERNAL_SERVER_ERROR, String::from(AppRes::fail()))
             }
