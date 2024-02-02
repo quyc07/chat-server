@@ -20,3 +20,12 @@ services:
     volumes:
       - D:\volume\nginx\nginx.conf:/etc/nginx/nginx.conf
       - D:\https:/opt/nginx/ssl_key
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: onlyoffice
+    ports:
+      - 443:443
+    volumes:
+      - D:\volume\onlyoffice:/var/www/onlyoffice/Data
+    environment:
+      JWT_SECRET: abc123

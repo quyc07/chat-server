@@ -95,3 +95,49 @@ server:
     key-store: classpath:server.pkcs12 # 将pkcs12文件放在resources目录下
     key-store-password: 123456 # 该密码是在生成证书时创建的
 ```
+
+## onlyoffice
+
+### 官方参考
+
+[onlyoffice官方安装链接](https://helpcenter.onlyoffice.com/installation/docs-community-install-docker.aspx?_ga=2.51711023.782359554.1594636128-1157782750.1587541027)
+
+### 创建ssl文件
+
+参考上述步骤，注意文件名修改为如下文件:
+
+```
+tls.crt  
+tls.csr  
+tls.key
+```
+
+### 加固
+
+```shell
+openssl dhparam -out dhparam.pem 2048
+```
+
+### 配置certs挂载目录
+
+```shell
+mkdir -p D:\volume\onlyoffice\data
+cp tls.key /app/onlyoffice/DocumentServer/data/certs/
+cp tls.crt /app/onlyoffice/DocumentServer/data/certs/
+cp dhparam.pem /app/onlyoffice/DocumentServer/data/certs/
+chmod 400 /app/onlyoffice/DocumentServer/data/certs/onlyoffice.key
+```
+### docker-compose.yml
+
+```yaml
+services:
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: wq-office
+    ports:
+      - 443:443
+    volumes:
+      - D:\volume\onlyoffice\data:/var/www/onlyoffice/Data
+    environment:
+      JWT_SECRET: abc123
+```
