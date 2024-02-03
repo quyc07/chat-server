@@ -10,7 +10,7 @@ use validator::{Validate, ValidateArgs};
 
 use crate::{AppRes, Res};
 use crate::app_state::AppState;
-use crate::auth::{AuthError, KEYS};
+use crate::auth::{AuthError, Token, KEYS};
 use crate::entity::prelude::User;
 use crate::entity::user;
 use crate::err::{ErrPrint, ServerError};
@@ -54,7 +54,7 @@ impl Into<String> for UserErr {
     }
 }
 
-async fn all(State(app_state): State<AppState>) -> Res<Vec<user::Model>> {
+async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<user::Model>> {
     let result = User::find().all(&app_state.db().await).await;
     let model = result.unwrap();
     Ok(AppRes::success(model))
@@ -80,12 +80,13 @@ async fn register(State(app_state): State<AppState>, ValidatedJson(req): Validat
 }
 
 async fn login(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJson<UserLoginReq>) -> Res<UserLoginRes> {
-    if req.name != "andy" && req.password != "123" {
+    let user = find_by_name(&app_state, &req.name).await.unwrap().unwrap();
+    if user.password != req.password {
         return Err(ServerError::from(AuthError::WrongCredentials));
     }
-    let user = find_by_name(&app_state, &req.name).await.unwrap().unwrap();
     // Create the authorization token
-    let token = encode(&Header::default(), &user, &KEYS.encoding)
+    let token = Token::from(user);
+    let token = encode(&Header::default(), &token, &KEYS.encoding)
         .map_err(|_| AuthError::TokenCreation)?;
 
     // Send the authorized token

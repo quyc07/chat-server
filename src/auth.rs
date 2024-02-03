@@ -3,8 +3,6 @@ use std::fmt::Display;
 use axum::{async_trait, RequestPartsExt};
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use axum_extra::headers::Authorization;
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::TypedHeader;
@@ -14,24 +12,16 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::AppRes;
+use crate::entity::user;
 use crate::err::{ErrPrint, ServerError};
 
 pub static KEYS: Lazy<Keys> = Lazy::new(|| {
-    let secret = std::env::var("JWT_SECRET").expect("jwt_token");
+    let secret = std::env::var("JWT_SECRET").unwrap_or("abc".to_string());
     Keys::new(secret.as_bytes())
 });
 
-impl AuthBody {
-    fn new(access_token: String) -> Self {
-        Self {
-            access_token,
-            token_type: "Bearer".to_string(),
-        }
-    }
-}
-
 #[async_trait]
-impl<S> FromRequestParts<S> for Claims
+impl<S> FromRequestParts<S> for Token
     where
         S: Send + Sync,
 {
@@ -44,7 +34,7 @@ impl<S> FromRequestParts<S> for Claims
             .await
             .map_err(|_| AuthError::InvalidToken)?;
         // Decode the user data
-        let token_data = decode::<Claims>(bearer.token(), &KEYS.decoding, &Validation::default())
+        let token_data = decode::<Token>(bearer.token(), &KEYS.decoding, &Validation::default())
             .map_err(|_| AuthError::InvalidToken)?;
 
         Ok(token_data.claims)
@@ -66,22 +56,22 @@ impl Keys {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Claims {
-    sub: String,
-    company: String,
-    exp: usize,
+pub struct Token {
+    id: i32,
+    name: String,
+    email: String,
+    phone: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct AuthBody {
-    access_token: String,
-    token_type: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct AuthPayload {
-    client_id: String,
-    client_secret: String,
+impl From<user::Model> for Token {
+    fn from(value: user::Model) -> Self {
+        Token {
+            id: value.id,
+            name: value.name,
+            email: value.email,
+            phone: value.phone,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
