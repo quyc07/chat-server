@@ -8,11 +8,12 @@ use thiserror::Error;
 use tracing::error;
 use validator::{Validate, ValidateArgs};
 
+use entity::prelude::User;
+use entity::user;
+
 use crate::{AppRes, auth, Res};
 use crate::app_state::AppState;
 use crate::auth::{AuthError, Token};
-use crate::entity::prelude::User;
-use crate::entity::user;
 use crate::err::{ErrPrint, ServerError};
 use crate::validate::ValidatedJson;
 

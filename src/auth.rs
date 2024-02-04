@@ -16,9 +16,10 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use entity::user;
+
 use crate::{AppRes, Res};
 use crate::app_state::AppState;
-use crate::entity::user;
 use crate::err::{ErrPrint, ServerError};
 
 pub static KEYS: Lazy<Keys> = Lazy::new(|| {

@@ -8,7 +8,6 @@ use serde::Serialize;
 use crate::err::ServerError;
 
 pub mod user;
-pub mod entity;
 pub mod app_state;
 pub mod err;
 pub mod validate;
