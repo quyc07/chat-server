@@ -1,4 +1,6 @@
 use std::fmt::Display;
+use std::ops::Add;
+use std::time::Duration;
 
 use axum::{async_trait, RequestPartsExt};
 use axum::extract::FromRequestParts;
@@ -6,6 +8,7 @@ use axum::http::request::Parts;
 use axum_extra::headers::Authorization;
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::TypedHeader;
+use chrono::Utc;
 use jsonwebtoken::{decode, DecodingKey, EncodingKey, Validation};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -61,6 +64,8 @@ pub struct Token {
     name: String,
     email: String,
     phone: Option<String>,
+    // 失效时间，timestamp
+    exp: i64,
 }
 
 impl From<user::Model> for Token {
@@ -70,6 +75,7 @@ impl From<user::Model> for Token {
             name: value.name,
             email: value.email,
             phone: value.phone,
+            exp: Utc::now().add(Duration::from_secs(60 * 5)).timestamp(),
         }
     }
 }
@@ -93,3 +99,78 @@ impl From<AuthError> for String {
         AppRes::fail_with_msg(err.to_string()).into()
     }
 }
+
+
+#[cfg(test)]
+mod test {
+    use std::ops::Add;
+    use std::time::Duration;
+
+    use chrono::{DateTime, Utc};
+    use hmac::{Hmac, Mac};
+    use jsonwebtoken::{decode, encode, Header, Validation};
+    use jwt::{SignWithKey, VerifyWithKey};
+    use serde::{Deserialize, Serialize};
+    use sha2::Sha256;
+
+    use crate::auth::{AuthError, Keys, KEYS, Token};
+
+    #[test]
+    fn test_token() {
+        let keys = Keys::new("abc".as_bytes());
+        let token = Token {
+            id: 0,
+            name: "name".to_string(),
+            email: "email".to_string(),
+            phone: None,
+            exp: Utc::now().add(Duration::from_secs(100)).timestamp(),
+        };
+
+        let encode_token = encode(&Header::default(), &token, &KEYS.encoding)
+            .map_err(|_| AuthError::TokenCreation).unwrap();
+        println!("{encode_token}");
+        let token_data = decode::<Token>(&encode_token, &KEYS.decoding, &Validation::default())
+            .map_err(|_| AuthError::InvalidToken).unwrap();
+        println!("{:?}", token_data.claims)
+    }
+
+
+    #[derive(Serialize, Deserialize, Debug)]
+    enum TokenType {
+        Token,
+        Refresh,
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct TokenWithData<T> {
+        data: T,
+        expired_at: DateTime<Utc>,
+        token_type: TokenType,
+    }
+
+    #[test]
+    fn test_token_custom_expire() {
+        let keys = Keys::new("123".as_bytes());
+        let token_with_data = TokenWithData {
+            data: String::from("abc"),
+            expired_at: Utc::now() + Duration::from_secs(100),
+            token_type: TokenType::Token,
+        };
+
+        let encode_token = token_with_data.sign_with_key(&create_hmac_key("123")).unwrap();
+        println!("{}", encode_token);
+        let decode_token: TokenWithData<String> = encode_token.as_str().verify_with_key(&create_hmac_key("123")).unwrap();
+        // let decode_token =
+        //     VerifyWithKey::<Token>::verify_with_key(&*encode_token, &create_hmac_key("123")).unwrap();
+        if decode_token.expired_at < Utc::now() {
+            println!("expired exp={}", decode_token.expired_at);
+        }
+        println!("{:?}", decode_token);
+    }
+
+    fn create_hmac_key(server_key: &str) -> Hmac<Sha256> {
+        Hmac::<Sha256>::new_from_slice(server_key.as_bytes()).expect("invalid server key")
+    }
+}
+
+
