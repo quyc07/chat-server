@@ -5,16 +5,19 @@ use std::time::Duration;
 use axum::{async_trait, RequestPartsExt};
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
+use axum::Router;
+use axum::routing::post;
 use axum_extra::headers::Authorization;
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::TypedHeader;
-use chrono::Utc;
-use jsonwebtoken::{decode, DecodingKey, EncodingKey, Validation};
+use chrono::{DateTime, Utc};
+use jsonwebtoken::{decode, DecodingKey, encode, EncodingKey, Header, TokenData, Validation};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::AppRes;
+use crate::{AppRes, Res};
+use crate::app_state::AppState;
 use crate::entity::user;
 use crate::err::{ErrPrint, ServerError};
 
@@ -22,41 +25,6 @@ pub static KEYS: Lazy<Keys> = Lazy::new(|| {
     let secret = std::env::var("JWT_SECRET").unwrap_or("abc".to_string());
     Keys::new(secret.as_bytes())
 });
-
-#[async_trait]
-impl<S> FromRequestParts<S> for Token
-    where
-        S: Send + Sync,
-{
-    type Rejection = ServerError;
-
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // Extract the token from the authorization header
-        let TypedHeader(Authorization(bearer)) = parts
-            .extract::<TypedHeader<Authorization<Bearer>>>()
-            .await
-            .map_err(|_| AuthError::InvalidToken)?;
-        // Decode the user data
-        let token_data = decode::<Token>(bearer.token(), &KEYS.decoding, &Validation::default())
-            .map_err(|_| AuthError::InvalidToken)?;
-
-        Ok(token_data.claims)
-    }
-}
-
-pub struct Keys {
-    pub(crate) encoding: EncodingKey,
-    pub(crate) decoding: DecodingKey,
-}
-
-impl Keys {
-    fn new(secret: &[u8]) -> Self {
-        Self {
-            encoding: EncodingKey::from_secret(secret),
-            decoding: DecodingKey::from_secret(secret),
-        }
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Token {
@@ -75,10 +43,31 @@ impl From<user::Model> for Token {
             name: value.name,
             email: value.email,
             phone: value.phone,
-            exp: Utc::now().add(Duration::from_secs(60 * 5)).timestamp(),
+            exp: expire(),
         }
     }
 }
+
+#[async_trait]
+impl<S> FromRequestParts<S> for Token
+    where
+        S: Send + Sync,
+{
+    type Rejection = ServerError;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // Extract the token from the authorization header
+        let TypedHeader(Authorization(bearer)) = parts
+            .extract::<TypedHeader<Authorization<Bearer>>>()
+            .await
+            .map_err(|_| AuthError::InvalidToken)?;
+        // Decode the user data
+        let token_data = parse_token(bearer.token()).await?;
+
+        Ok(token_data.claims)
+    }
+}
+
 
 #[derive(Debug, Error)]
 pub enum AuthError {
@@ -101,6 +90,55 @@ impl From<AuthError> for String {
 }
 
 
+pub struct TokenApi;
+
+impl TokenApi {
+    pub async fn route(app_state: AppState) -> Router {
+        Router::new()
+            .route("/renew", post(renew))
+            .with_state(app_state)
+    }
+}
+
+
+async fn renew(token: Token) -> Res<String> {
+    let token = Token {
+        exp: expire(),
+        ..token
+    };
+    Ok(AppRes::success(gen_token(token).await?))
+}
+
+fn expire() -> i64 {
+    Utc::now().add(Duration::from_secs(60 * 5)).timestamp()
+}
+
+pub async fn expire_utc() -> DateTime<Utc> {
+    Utc::now().add(Duration::from_secs(60 * 5))
+}
+
+pub async fn gen_token(token: Token) -> Result<String, AuthError> {
+    encode(&Header::default(), &token, &KEYS.encoding).map_err(|_| AuthError::TokenCreation)
+}
+
+pub async fn parse_token(token: &str) -> Result<TokenData<Token>, AuthError> {
+    decode(token, &KEYS.decoding, &Validation::default()).map_err(|_| AuthError::InvalidToken)
+}
+
+pub struct Keys {
+    pub(crate) encoding: EncodingKey,
+    pub(crate) decoding: DecodingKey,
+}
+
+impl Keys {
+    fn new(secret: &[u8]) -> Self {
+        Self {
+            encoding: EncodingKey::from_secret(secret),
+            decoding: DecodingKey::from_secret(secret),
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::ops::Add;
@@ -113,7 +151,7 @@ mod test {
     use serde::{Deserialize, Serialize};
     use sha2::Sha256;
 
-    use crate::auth::{AuthError, Keys, KEYS, Token};
+    use crate::auth::{AuthError, KEYS, Keys, Token};
 
     #[test]
     fn test_token() {
@@ -172,5 +210,4 @@ mod test {
         Hmac::<Sha256>::new_from_slice(server_key.as_bytes()).expect("invalid server key")
     }
 }
-
 

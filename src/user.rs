@@ -1,16 +1,16 @@
 use axum::extract::State;
 use axum::Router;
 use axum::routing::{get, post};
-use jsonwebtoken::{encode, Header};
+use chrono::{DateTime, Utc};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 use validator::{Validate, ValidateArgs};
 
-use crate::{AppRes, Res};
+use crate::{AppRes, auth, Res};
 use crate::app_state::AppState;
-use crate::auth::{AuthError, Token, KEYS};
+use crate::auth::{AuthError, Token};
 use crate::entity::prelude::User;
 use crate::entity::user;
 use crate::err::{ErrPrint, ServerError};
@@ -86,11 +86,10 @@ async fn login(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJ
     }
     // Create the authorization token
     let token = Token::from(user);
-    let token = encode(&Header::default(), &token, &KEYS.encoding)
-        .map_err(|_| AuthError::TokenCreation)?;
+    let access_token = auth::gen_token(token).await?;
 
     // Send the authorized token
-    Ok(AppRes::success(UserLoginRes { access_token: token, token_type: "Bearer".to_string() }))
+    Ok(AppRes::success(UserLoginRes { access_token, access_token_expires: auth::expire_utc().await }))
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -104,7 +103,7 @@ struct UserLoginReq {
 #[derive(Debug, Serialize)]
 struct UserLoginRes {
     access_token: String,
-    token_type: String,
+    access_token_expires: DateTime<Utc>,
 }
 
 

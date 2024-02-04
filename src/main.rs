@@ -6,6 +6,7 @@ use tokio::net::TcpListener;
 use tracing::info;
 
 use chat_server::app_state::AppState;
+use chat_server::auth::TokenApi;
 use chat_server::log;
 use chat_server::user::UserApi;
 
@@ -17,7 +18,8 @@ async fn main() {
     let app_state = AppState::new().await.unwrap();
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
-        .nest("/user", UserApi::route(app_state).await)
+        .nest("/user", UserApi::route(app_state.clone()).await)
+        .nest("/token", TokenApi::route(app_state.clone()).await)
         ;
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
