@@ -1,7 +1,7 @@
 use axum::extract::State;
 use axum::Router;
 use axum::routing::{get, post};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -89,7 +89,7 @@ async fn login(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJ
     let access_token = auth::gen_token(token).await?;
 
     // Send the authorized token
-    Ok(AppRes::success(UserLoginRes { access_token, access_token_expires: auth::expire_utc().await }))
+    Ok(AppRes::success(UserLoginRes { access_token, access_token_expires: auth::expire().await }))
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -103,7 +103,7 @@ struct UserLoginReq {
 #[derive(Debug, Serialize)]
 struct UserLoginRes {
     access_token: String,
-    access_token_expires: DateTime<Utc>,
+    access_token_expires: DateTime<Local>,
 }
 
 

@@ -10,7 +10,7 @@ use axum::routing::post;
 use axum_extra::headers::Authorization;
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::TypedHeader;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local};
 use jsonwebtoken::{decode, DecodingKey, encode, EncodingKey, Header, TokenData, Validation};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -43,7 +43,7 @@ impl From<user::Model> for Token {
             name: value.name,
             email: value.email,
             phone: value.phone,
-            exp: expire(),
+            exp: expire_timestamp(),
         }
     }
 }
@@ -103,18 +103,20 @@ impl TokenApi {
 
 async fn renew(token: Token) -> Res<String> {
     let token = Token {
-        exp: expire(),
+        exp: expire_timestamp(),
         ..token
     };
     Ok(AppRes::success(gen_token(token).await?))
 }
 
-fn expire() -> i64 {
-    Utc::now().add(Duration::from_secs(60 * 5)).timestamp()
+const SECOND_TO_EXPIRED: u64 = 60 * 5;
+
+fn expire_timestamp() -> i64 {
+    Local::now().add(Duration::from_secs(SECOND_TO_EXPIRED)).timestamp()
 }
 
-pub async fn expire_utc() -> DateTime<Utc> {
-    Utc::now().add(Duration::from_secs(60 * 5))
+pub async fn expire() -> DateTime<Local> {
+    Local::now().add(Duration::from_secs(SECOND_TO_EXPIRED))
 }
 
 pub async fn gen_token(token: Token) -> Result<String, AuthError> {
@@ -144,7 +146,7 @@ mod test {
     use std::ops::Add;
     use std::time::Duration;
 
-    use chrono::{DateTime, Utc};
+    use chrono::{DateTime, Local};
     use hmac::{Hmac, Mac};
     use jsonwebtoken::{decode, encode, Header, Validation};
     use jwt::{SignWithKey, VerifyWithKey};
@@ -161,7 +163,7 @@ mod test {
             name: "name".to_string(),
             email: "email".to_string(),
             phone: None,
-            exp: Utc::now().add(Duration::from_secs(100)).timestamp(),
+            exp: Local::now().add(Duration::from_secs(100)).timestamp(),
         };
 
         let encode_token = encode(&Header::default(), &token, &KEYS.encoding)
@@ -182,7 +184,7 @@ mod test {
     #[derive(Serialize, Deserialize, Debug)]
     struct TokenWithData<T> {
         data: T,
-        expired_at: DateTime<Utc>,
+        expired_at: DateTime<Local>,
         token_type: TokenType,
     }
 
@@ -191,7 +193,7 @@ mod test {
         let keys = Keys::new("123".as_bytes());
         let token_with_data = TokenWithData {
             data: String::from("abc"),
-            expired_at: Utc::now() + Duration::from_secs(100),
+            expired_at: Local::now() + Duration::from_secs(100),
             token_type: TokenType::Token,
         };
 
@@ -200,7 +202,7 @@ mod test {
         let decode_token: TokenWithData<String> = encode_token.as_str().verify_with_key(&create_hmac_key("123")).unwrap();
         // let decode_token =
         //     VerifyWithKey::<Token>::verify_with_key(&*encode_token, &create_hmac_key("123")).unwrap();
-        if decode_token.expired_at < Utc::now() {
+        if decode_token.expired_at < Local::now() {
             println!("expired exp={}", decode_token.expired_at);
         }
         println!("{:?}", decode_token);
@@ -208,6 +210,16 @@ mod test {
 
     fn create_hmac_key(server_key: &str) -> Hmac<Sha256> {
         Hmac::<Sha256>::new_from_slice(server_key.as_bytes()).expect("invalid server key")
+    }
+
+    #[test]
+    fn test_date() {
+        let time = Local::now();
+        println!("{}", time);
+        println!("{:?}", time.timezone());
+        let time = Local::now();
+        println!("{}", time);
+        println!("{:?}", time.timezone());
     }
 }
 
