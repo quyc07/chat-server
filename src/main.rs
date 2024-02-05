@@ -9,6 +9,7 @@ use chat_server::app_state::AppState;
 use chat_server::auth::TokenApi;
 use chat_server::log;
 use chat_server::user::UserApi;
+use migration::{Migrator, MigratorTrait};
 
 #[tokio::main]
 async fn main() {
@@ -16,6 +17,8 @@ async fn main() {
     color_eyre::install().unwrap();
     info!("chat server start begin!");
     let app_state = AppState::new().await.unwrap();
+    // Apply all pending migrations
+    Migrator::up(&app_state.db().await, None).await.expect("fail to apply migrations");
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
         .nest("/user", UserApi::route(app_state.clone()).await)

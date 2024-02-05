@@ -2,13 +2,14 @@ use axum::extract::State;
 use axum::Router;
 use axum::routing::{get, post};
 use chrono::{DateTime, Local};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 use validator::{Validate, ValidateArgs};
 
 use entity::prelude::User;
+use entity::sea_orm_active_enums::Status;
 use entity::user;
 
 use crate::{AppRes, auth, Res};
@@ -75,6 +76,7 @@ async fn register(State(app_state): State<AppState>, ValidatedJson(req): Validat
         phone: Set(req.phone),
         create_time: Default::default(),
         update_time: Default::default(),
+        status: ActiveValue::NotSet,
     };
     let model = user.insert(&app_state.db().await).await?;
     Ok(AppRes::success(model))

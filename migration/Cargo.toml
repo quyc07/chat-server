@@ -19,4 +19,6 @@ features = [
   # e.g.
   # "runtime-tokio-rustls",  # `ASYNC_RUNTIME` feature
   # "sqlx-postgres",         # `DATABASE_DRIVER` feature
+    "runtime-async-std-rustls",
+    "sqlx-mysql"
 ]
