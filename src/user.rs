@@ -1,5 +1,5 @@
-use axum::extract::State;
-use axum::Router;
+use axum::extract::{FromRequestParts, Path, State};
+use axum::{Json, Router};
 use axum::routing::{get, post};
 use chrono::{DateTime, Local};
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
@@ -26,6 +26,8 @@ impl UserApi {
             .route("/register", post(register))
             .route("/all", get(all))
             .route("/login", post(login))
+            .route("/:uid/send", post(send))
+            .route("/:uid/history", post(get_history_msg))
             .with_state(app_state)
     }
 }
@@ -57,7 +59,7 @@ impl Into<String> for UserErr {
 }
 
 async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<user::Model>> {
-    let result = User::find().all(&app_state.db().await).await;
+    let result = User::find().all(&app_state.db).await;
     let model = result.unwrap();
     Ok(AppRes::success(model))
 }
@@ -78,7 +80,7 @@ async fn register(State(app_state): State<AppState>, ValidatedJson(req): Validat
         update_time: Default::default(),
         status: ActiveValue::NotSet,
     };
-    let model = user.insert(&app_state.db().await).await?;
+    let model = user.insert(&app_state.db).await?;
     Ok(AppRes::success(model))
 }
 
@@ -109,9 +111,43 @@ struct UserLoginRes {
     access_token_expires: DateTime<Local>,
 }
 
+// 按照参数定义的先后顺序进行解析，ValidatedJson会消耗掉Request，因此要放在最后面解析
+async fn send(State(app_state): State<AppState>,
+              uid: Path<i32>,
+              token: Token,
+              ValidatedJson(msg): ValidatedJson<SendMsgReq>) -> Res<i64> {
+    let mid = app_state.msg_db.lock().unwrap()
+        .messages()
+        .send_to_dm(token.id as i64, uid.0 as i64, msg.msg.as_bytes())?;
+    return Ok(AppRes::success(mid));
+}
+
+#[derive(Deserialize, Validate, Debug)]
+struct SendMsgReq {
+    #[validate(length(min = 1, code = "1", message = "msg is blank"))]
+    msg: String,
+}
+
+async fn get_history_msg(State(app_state): State<AppState>,
+                         uid: Path<i32>,
+                         token: Token) -> Res<Vec<Message>> {
+    let msgs = app_state.msg_db.lock().unwrap().messages()
+        .fetch_dm_messages_before(token.id as i64, uid.0 as i64, None, 1000)?;
+    // .fetch_user_messages_after(uid.0 as i64, None, 1000)?;
+    let msg = msgs.into_iter()
+        .map(|(_, msg)| Message { msg: String::from_utf8(msg).unwrap() })
+        .collect();
+
+    Ok(AppRes::success(msg))
+}
+
+#[derive(Serialize)]
+struct Message {
+    msg: String,
+}
 
 async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::Model>, DbErr> {
-    User::find().filter(user::Column::Name.eq(name)).one(&app_state.db().await).await
+    User::find().filter(user::Column::Name.eq(name)).one(&app_state.db).await
 }
 
 

@@ -18,7 +18,7 @@ async fn main() {
     info!("chat server start begin!");
     let app_state = AppState::new().await.unwrap();
     // Apply all pending migrations
-    Migrator::up(&app_state.db().await, None).await.expect("fail to apply migrations");
+    Migrator::up(&app_state.db, None).await.expect("fail to apply migrations");
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
         .nest("/user", UserApi::route(app_state.clone()).await)

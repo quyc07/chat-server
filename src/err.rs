@@ -6,6 +6,7 @@ use sea_orm::DbErr;
 use thiserror::Error;
 use tracing::{error, warn};
 use validator::ValidationErrors;
+use msg::Error;
 
 use crate::AppRes;
 use crate::auth::AuthError;
@@ -23,6 +24,8 @@ pub enum ServerError {
     DbErr(#[from] DbErr),
     #[error(transparent)]
     AuthErr(#[from] AuthError),
+    #[error(transparent)]
+    MsgErr(#[from] msg::Error),
 }
 
 impl IntoResponse for ServerError {
@@ -49,6 +52,10 @@ impl IntoResponse for ServerError {
                 err.print();
                 (StatusCode::OK, err.into())
             }
+            ServerError::MsgErr(err) => {
+                err.print();
+                (StatusCode::OK, MsgErrorWrapper(err).into())
+            }
         }.into_response()
     }
 }
@@ -57,5 +64,15 @@ pub trait ErrPrint: std::fmt::Display {
     fn print(&self) {
         let report = eyre!(self.to_string());
         error!(?report);
+    }
+}
+
+impl ErrPrint for msg::Error {}
+
+struct MsgErrorWrapper(msg::Error);
+
+impl From<MsgErrorWrapper> for String {
+    fn from(value: MsgErrorWrapper) -> Self {
+        value.0.to_string()
     }
 }

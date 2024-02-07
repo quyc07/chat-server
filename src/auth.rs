@@ -29,10 +29,10 @@ pub static KEYS: Lazy<Keys> = Lazy::new(|| {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Token {
-    id: i32,
-    name: String,
-    email: String,
-    phone: Option<String>,
+    pub id: i32,
+    pub name: String,
+    pub email: String,
+    pub phone: Option<String>,
     // 失效时间，timestamp
     exp: i64,
 }
