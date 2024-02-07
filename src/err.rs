@@ -6,7 +6,6 @@ use sea_orm::DbErr;
 use thiserror::Error;
 use tracing::{error, warn};
 use validator::ValidationErrors;
-use msg::Error;
 
 use crate::AppRes;
 use crate::auth::AuthError;
@@ -14,6 +13,8 @@ use crate::user::UserErr;
 
 #[derive(Debug, Error)]
 pub enum ServerError {
+    #[error("err: {0}")]
+    CustomErr(String),
     #[error(transparent)]
     ValidationError(#[from] ValidationErrors),
     #[error(transparent)]
@@ -26,6 +27,8 @@ pub enum ServerError {
     AuthErr(#[from] AuthError),
     #[error(transparent)]
     MsgErr(#[from] msg::Error),
+    #[error(transparent)]
+    IoErr(#[from]std::io::Error),
 }
 
 impl IntoResponse for ServerError {
@@ -46,15 +49,23 @@ impl IntoResponse for ServerError {
             }
             ServerError::UserErr(err) => {
                 err.print();
-                (StatusCode::OK, err.into())
+                (StatusCode::OK, err.to_string())
             }
             ServerError::AuthErr(err) => {
                 err.print();
-                (StatusCode::OK, err.into())
+                (StatusCode::OK, err.to_string())
             }
             ServerError::MsgErr(err) => {
                 err.print();
-                (StatusCode::OK, MsgErrorWrapper(err).into())
+                (StatusCode::OK, err.to_string())
+            }
+            ServerError::IoErr(err) => {
+                err.print();
+                (StatusCode::OK, err.to_string())
+            }
+            ServerError::CustomErr(err) => {
+                err.print();
+                (StatusCode::OK, err.to_string())
             }
         }.into_response()
     }
@@ -67,12 +78,15 @@ pub trait ErrPrint: std::fmt::Display {
     }
 }
 
+impl ErrPrint for String {}
+
 impl ErrPrint for msg::Error {}
 
-struct MsgErrorWrapper(msg::Error);
+impl ErrPrint for std::io::Error {}
 
-impl From<MsgErrorWrapper> for String {
-    fn from(value: MsgErrorWrapper) -> Self {
-        value.0.to_string()
-    }
-}
+// impl ErrPrint for CustomErr{}
+
+// #[derive(Debug, Error)]
+// struct CustomErr {
+//     msg: String,
+// }
