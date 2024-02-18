@@ -1,7 +1,8 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Router;
 use axum::routing::{get, post};
 use chrono::{DateTime, Local};
+use color_eyre::owo_colors::OwoColorize;
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -119,7 +120,7 @@ async fn send(State(app_state): State<AppState>,
     let mid = app_state.msg_db.lock().unwrap()
         .messages()
         .send_to_dm(token.id as i64, uid.0 as i64,
-                    &serde_json::to_vec(&Message::from(msg)).map_err(|e| ServerError::CustomErr("fail to transfer message to vec".to_string()))?,
+                    &serde_json::to_vec(&Message::new(token.id, uid.0, msg.msg)).map_err(|e| ServerError::CustomErr("fail to transfer message to vec".to_string()))?,
         )?;
     return Ok(AppRes::success(mid));
 }
@@ -143,22 +144,29 @@ async fn get_history_msg(State(app_state): State<AppState>,
     Ok(AppRes::success(msg))
 }
 
+#[derive(Debug, Deserialize)]
+struct Params {
+    after_mid: Option<i64>,
+}
+
 async fn history(
     State(app_state): State<AppState>,
-    // after_mid: Option<Query<i64>>,
+    Query(params): Query<Params>,
     token: Token,
 ) -> Res<Vec<ChatMessage>> {
     let messages = app_state.msg_db.lock().unwrap()
         .messages()
-        .fetch_user_messages_after(token.id as i64, Some(1), 1000)?;
-    Ok(AppRes::success(messages
+        .fetch_user_messages_after(token.id as i64, params.after_mid, 1000)?;
+    let mut chat_messages = messages
         // .map_err(|e| ServerError::CustomErr("fail to fetch message".to_string()))?
         .into_iter()
         .filter_map(|(id, data)| {
             Some(id).zip(serde_json::from_slice::<Message>(&data).ok())
         })
         .map(|(id, payload)| ChatMessage { mid: id, payload })
-        .collect()))
+        .collect::<Vec<ChatMessage>>();
+    chat_messages.sort_by(|msg1, msg2| msg2.payload.create_time.cmp(&msg1.payload.create_time));
+    Ok(AppRes::success(chat_messages))
 }
 
 /// Chat message
@@ -171,12 +179,20 @@ pub struct ChatMessage {
 
 #[derive(Serialize, Deserialize)]
 struct Message {
+    from_uid: i32,
+    to_uid: i32,
+    create_time: DateTime<Local>,
     msg: String,
 }
 
-impl From<SendMsgReq> for Message {
-    fn from(value: SendMsgReq) -> Self {
-        Self { msg: value.msg }
+impl Message {
+    fn new(from_uid: i32, to_uid: i32, msg: String) -> Self {
+        Self {
+            from_uid,
+            to_uid,
+            create_time: Local::now(),
+            msg,
+        }
     }
 }
 
