@@ -1,5 +1,5 @@
-use axum::extract::{FromRequestParts, Path, State};
-use axum::{Json, Router};
+use axum::extract::{Path, State};
+use axum::Router;
 use axum::routing::{get, post};
 use chrono::{DateTime, Local};
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
@@ -9,7 +9,6 @@ use tracing::error;
 use validator::{Validate, ValidateArgs};
 
 use entity::prelude::User;
-use entity::sea_orm_active_enums::Status;
 use entity::user;
 
 use crate::{AppRes, auth, Res};
@@ -27,7 +26,8 @@ impl UserApi {
             .route("/all", get(all))
             .route("/login", post(login))
             .route("/:uid/send", post(send))
-            .route("/:uid/history", post(get_history_msg))
+            .route("/:uid/history", get(get_history_msg))
+            .route("/history", get(history))
             .with_state(app_state)
     }
 }
@@ -118,7 +118,9 @@ async fn send(State(app_state): State<AppState>,
               ValidatedJson(msg): ValidatedJson<SendMsgReq>) -> Res<i64> {
     let mid = app_state.msg_db.lock().unwrap()
         .messages()
-        .send_to_dm(token.id as i64, uid.0 as i64, msg.msg.as_bytes())?;
+        .send_to_dm(token.id as i64, uid.0 as i64,
+                    &serde_json::to_vec(&Message::from(msg)).map_err(|e| ServerError::CustomErr("fail to transfer message to vec".to_string()))?,
+        )?;
     return Ok(AppRes::success(mid));
 }
 
@@ -135,16 +137,49 @@ async fn get_history_msg(State(app_state): State<AppState>,
         .fetch_dm_messages_before(token.id as i64, uid.0 as i64, None, 1000)?;
     // .fetch_user_messages_after(uid.0 as i64, None, 1000)?;
     let msg = msgs.into_iter()
-        .map(|(_, msg)| Message { msg: String::from_utf8(msg).unwrap() })
+        .filter_map(|(_, msg)| serde_json::from_slice::<Message>(&msg).ok())
         .collect();
 
     Ok(AppRes::success(msg))
 }
 
-#[derive(Serialize)]
+async fn history(
+    State(app_state): State<AppState>,
+    // after_mid: Option<Query<i64>>,
+    token: Token,
+) -> Res<Vec<ChatMessage>> {
+    let messages = app_state.msg_db.lock().unwrap()
+        .messages()
+        .fetch_user_messages_after(token.id as i64, Some(1), 1000)?;
+    Ok(AppRes::success(messages
+        // .map_err(|e| ServerError::CustomErr("fail to fetch message".to_string()))?
+        .into_iter()
+        .filter_map(|(id, data)| {
+            Some(id).zip(serde_json::from_slice::<Message>(&data).ok())
+        })
+        .map(|(id, payload)| ChatMessage { mid: id, payload })
+        .collect()))
+}
+
+/// Chat message
+#[derive(Deserialize, Serialize)]
+pub struct ChatMessage {
+    /// Message id
+    pub mid: i64,
+    pub payload: Message,
+}
+
+#[derive(Serialize, Deserialize)]
 struct Message {
     msg: String,
 }
+
+impl From<SendMsgReq> for Message {
+    fn from(value: SendMsgReq) -> Self {
+        Self { msg: value.msg }
+    }
+}
+
 
 async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::Model>, DbErr> {
     User::find().filter(user::Column::Name.eq(name)).one(&app_state.db).await
