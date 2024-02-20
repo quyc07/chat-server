@@ -32,3 +32,4 @@ chrono = "0.4.31"
 anyhow = "1.0.79"
 sea-orm = { version = "0.12.11", features = ["sqlx-mysql", "runtime-tokio-native-tls", "macros", "debug-print"] }
 bytes = "1.5.0"
+itertools = "0.12.1"

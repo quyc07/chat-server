@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use axum::extract::{Path, Query, State};
 use axum::Router;
 use axum::routing::{get, post};
 use chrono::{DateTime, Local};
-use color_eyre::owo_colors::OwoColorize;
+use itertools::Itertools;
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -153,20 +154,22 @@ async fn history(
     State(app_state): State<AppState>,
     Query(params): Query<Params>,
     token: Token,
-) -> Res<Vec<ChatMessage>> {
+) -> Res<HashMap<i32, Vec<ChatMessage>>> {
     let messages = app_state.msg_db.lock().unwrap()
         .messages()
-        .fetch_user_messages_after(token.id as i64, params.after_mid, 1000)?;
+        .fetch_user_messages_after(token.id as i64, params.after_mid, i32::MAX as usize)?;
     let mut chat_messages = messages
-        // .map_err(|e| ServerError::CustomErr("fail to fetch message".to_string()))?
         .into_iter()
         .filter_map(|(id, data)| {
             Some(id).zip(serde_json::from_slice::<Message>(&data).ok())
         })
         .map(|(id, payload)| ChatMessage { mid: id, payload })
         .collect::<Vec<ChatMessage>>();
-    chat_messages.sort_by(|msg1, msg2| msg2.payload.create_time.cmp(&msg1.payload.create_time));
-    Ok(AppRes::success(chat_messages))
+    let mut target_uid_2_msg = chat_messages.into_iter().into_group_map_by(|x| {
+        if x.payload.from_uid == token.id { x.payload.to_uid } else { x.payload.from_uid }
+    });
+    target_uid_2_msg.iter_mut().for_each(|(_, v)| v.sort_by(|msg1, msg2| msg2.payload.create_time.cmp(&msg1.payload.create_time)));
+    Ok(AppRes::success(target_uid_2_msg))
 }
 
 /// Chat message
