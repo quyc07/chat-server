@@ -29,3 +29,4 @@ services:
       - D:\volume\onlyoffice:/var/www/onlyoffice/Data
     environment:
       JWT_SECRET: abc123
+      USE_UNAUTHORIZED_STORAGE: true
