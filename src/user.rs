@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+
 use axum::extract::{Path, Query, State};
 use axum::Router;
 use axum::routing::{get, post};
@@ -8,7 +9,7 @@ use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, Qu
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
-use validator::{Validate, ValidateArgs};
+use validator::Validate;
 
 use entity::prelude::User;
 use entity::user;
@@ -121,7 +122,7 @@ async fn send(State(app_state): State<AppState>,
     let mid = app_state.msg_db.lock().unwrap()
         .messages()
         .send_to_dm(token.id as i64, uid.0 as i64,
-                    &serde_json::to_vec(&Message::new(token.id, uid.0, msg.msg)).map_err(|e| ServerError::CustomErr("fail to transfer message to vec".to_string()))?,
+                    &serde_json::to_vec(&Message::new(token.id, uid.0, msg.msg)).map_err(|_e| ServerError::CustomErr("fail to transfer message to vec".to_string()))?,
         )?;
     return Ok(AppRes::success(mid));
 }
@@ -158,7 +159,7 @@ async fn history(
     let messages = app_state.msg_db.lock().unwrap()
         .messages()
         .fetch_user_messages_after(token.id as i64, params.after_mid, i32::MAX as usize)?;
-    let mut chat_messages = messages
+    let chat_messages = messages
         .into_iter()
         .filter_map(|(id, data)| {
             Some(id).zip(serde_json::from_slice::<Message>(&data).ok())
@@ -174,10 +175,10 @@ async fn history(
 
 /// Chat message
 #[derive(Deserialize, Serialize)]
-pub struct ChatMessage {
+struct ChatMessage {
     /// Message id
-    pub mid: i64,
-    pub payload: Message,
+    mid: i64,
+    payload: Message,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -2,9 +2,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
 use once_cell::sync::Lazy;
 use sea_orm::{Database, DatabaseConnection};
+
 use msg::MsgDb;
+
 use crate::err::ServerError;
 
 #[derive(Clone)]
@@ -25,7 +28,7 @@ impl AppState {
     pub async fn new() -> Result<AppState, ServerError> {
         let url = ENVS.get("DATABASE_URL")
             .ok_or(ServerError::CustomErr("fail to get database url from .env".to_string()))?;
-        let db: DatabaseConnection = Database::connect(url).await?;
+        let db = Database::connect(url).await?;
         let msg_db = MsgDb::open(PathBuf::from("data/msgdb")).expect("fail to init msg db");
         Ok(AppState { db, msg_db: Arc::new(Mutex::new(msg_db)) })
     }

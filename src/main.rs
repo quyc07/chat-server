@@ -1,5 +1,3 @@
-use std::fmt::Debug;
-
 use axum::Router;
 use axum::routing::get;
 use tokio::net::TcpListener;
