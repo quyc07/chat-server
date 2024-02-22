@@ -61,7 +61,7 @@ impl<S> FromRequestParts<S> for Token
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
             .map_err(|_| AuthError::InvalidToken)?;
-        // Decode the user data
+        // Decode the user data，同时校验exp是否过期
         let token_data = parse_token(bearer.token()).await?;
 
         Ok(token_data.claims)
@@ -124,7 +124,10 @@ pub async fn gen_token(token: Token) -> Result<String, AuthError> {
 }
 
 pub async fn parse_token(token: &str) -> Result<TokenData<Token>, AuthError> {
-    decode(token, &KEYS.decoding, &Validation::default()).map_err(|_| AuthError::InvalidToken)
+    let mut validation = Validation::default();
+    // 修改leeway=0，让exp校验使用绝对时间，参考Validation.leeway的使用
+    validation.leeway = 0;
+    decode(token, &KEYS.decoding, &validation).map_err(|_| AuthError::InvalidToken)
 }
 
 pub struct Keys {
@@ -144,6 +147,7 @@ impl Keys {
 #[cfg(test)]
 mod test {
     use std::ops::Add;
+    use std::thread::sleep;
     use std::time::Duration;
 
     use chrono::{DateTime, Local};
@@ -163,13 +167,17 @@ mod test {
             name: "name".to_string(),
             email: "email".to_string(),
             phone: None,
-            exp: Local::now().add(Duration::from_secs(100)).timestamp(),
+            exp: Local::now().add(Duration::from_secs(1)).timestamp(),
         };
 
         let encode_token = encode(&Header::default(), &token, &KEYS.encoding)
             .map_err(|_| AuthError::TokenCreation).unwrap();
         println!("{encode_token}");
-        let token_data = decode::<Token>(&encode_token, &KEYS.decoding, &Validation::default())
+        sleep(Duration::from_secs(2));
+        let mut validation = Validation::default();
+        // 修改leeway=0，让exp校验使用绝对时间，参考Validation.leeway的使用
+        validation.leeway = 0;
+        let token_data = decode::<Token>(&encode_token, &KEYS.decoding, &validation)
             .map_err(|_| AuthError::InvalidToken).unwrap();
         println!("{:?}", token_data.claims)
     }
