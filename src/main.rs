@@ -5,6 +5,7 @@ use tracing::info;
 
 use chat_server::app_state::AppState;
 use chat_server::auth::TokenApi;
+use chat_server::event::EventApi;
 use chat_server::log;
 use chat_server::user::UserApi;
 use migration::{Migrator, MigratorTrait};
@@ -21,6 +22,7 @@ async fn main() {
         .route("/", get(|| async { "Hello, World!" }))
         .nest("/user", UserApi::route(app_state.clone()).await)
         .nest("/token", TokenApi::route(app_state.clone()).await)
+        .nest("/event", EventApi::route(app_state.clone()).await)
         ;
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
