@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::Router;
@@ -18,6 +19,7 @@ use crate::{AppRes, auth, Res};
 use crate::app_state::AppState;
 use crate::auth::{AuthError, Token};
 use crate::err::{ErrPrint, ServerError};
+use crate::event::BroadcastEvent;
 use crate::validate::ValidatedJson;
 
 pub struct UserApi;
@@ -119,11 +121,14 @@ async fn send(State(app_state): State<AppState>,
               uid: Path<i32>,
               token: Token,
               ValidatedJson(msg): ValidatedJson<SendMsgReq>) -> Res<i64> {
+    let payload = ChatMessagePayload::new(token.id, uid.0, msg.msg);
     let mid = app_state.msg_db.lock().unwrap()
         .messages()
         .send_to_dm(token.id as i64, uid.0 as i64,
-                    &serde_json::to_vec(&Message::new(token.id, uid.0, msg.msg)).map_err(|_e| ServerError::CustomErr("fail to transfer message to vec".to_string()))?,
+                    &serde_json::to_vec(&payload)
+                        .map_err(|_e| ServerError::CustomErr("fail to transfer message to vec".to_string()))?,
         )?;
+    let _ = app_state.event_sender.send(Arc::new(BroadcastEvent::Chat { targets: BTreeSet::from([token.id, uid.0]), message: ChatMessage::new(mid, payload) }));
     return Ok(AppRes::success(mid));
 }
 
@@ -135,12 +140,12 @@ struct SendMsgReq {
 
 async fn get_history_msg(State(app_state): State<AppState>,
                          uid: Path<i32>,
-                         token: Token) -> Res<Vec<Message>> {
+                         token: Token) -> Res<Vec<ChatMessagePayload>> {
     let msgs = app_state.msg_db.lock().unwrap().messages()
         .fetch_dm_messages_before(token.id as i64, uid.0 as i64, None, 1000)?;
     // .fetch_user_messages_after(uid.0 as i64, None, 1000)?;
     let msg = msgs.into_iter()
-        .filter_map(|(_, msg)| serde_json::from_slice::<Message>(&msg).ok())
+        .filter_map(|(_, msg)| serde_json::from_slice::<ChatMessagePayload>(&msg).ok())
         .collect();
 
     Ok(AppRes::success(msg))
@@ -162,7 +167,7 @@ async fn history(
     let chat_messages = messages
         .into_iter()
         .filter_map(|(id, data)| {
-            Some(id).zip(serde_json::from_slice::<Message>(&data).ok())
+            Some(id).zip(serde_json::from_slice::<ChatMessagePayload>(&data).ok())
         })
         .map(|(id, payload)| ChatMessage { mid: id, payload })
         .collect::<Vec<ChatMessage>>();
@@ -174,22 +179,28 @@ async fn history(
 }
 
 /// Chat message
-#[derive(Deserialize, Serialize)]
-struct ChatMessage {
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct ChatMessage {
     /// Message id
-    mid: i64,
-    payload: Message,
+    pub mid: i64,
+    pub payload: ChatMessagePayload,
 }
 
-#[derive(Serialize, Deserialize)]
-struct Message {
-    from_uid: i32,
-    to_uid: i32,
-    create_time: DateTime<Local>,
-    msg: String,
+impl ChatMessage {
+    fn new(mid: i64, payload: ChatMessagePayload) -> Self {
+        ChatMessage { mid, payload }
+    }
 }
 
-impl Message {
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ChatMessagePayload {
+    pub from_uid: i32,
+    pub to_uid: i32,
+    pub create_time: DateTime<Local>,
+    pub msg: String,
+}
+
+impl ChatMessagePayload {
     fn new(from_uid: i32, to_uid: i32, msg: String) -> Self {
         Self {
             from_uid,

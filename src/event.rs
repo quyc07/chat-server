@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -8,14 +9,17 @@ use axum::response::sse::Event;
 use axum::Router;
 use axum::routing::get;
 use axum_extra::{headers, TypedHeader};
-use futures::{SinkExt, Stream};
+use chrono::{DateTime, Local};
+use futures::Stream;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep};
 use tower_http::services::ServeDir;
 
 use crate::app_state::AppState;
+use crate::auth::Token;
+use crate::user::{ChatMessage, ChatMessagePayload};
 
 pub struct EventApi;
 
@@ -26,13 +30,14 @@ impl EventApi {
         // build our application with a route
         Router::new()
             .fallback_service(static_files_service)
-            .route("/sse", get(sse_handler))
+            .route("/stream", get(event_handler))
             .with_state(app_state)
     }
 }
 
-async fn sse_handler(
+async fn event_handler(
     State(app_state): State<AppState>,
+    token: Token,
     TypedHeader(user_agent): TypedHeader<headers::UserAgent>,
 ) -> Sse<impl Stream<Item=Result<Event, Infallible>>> {
     println!("`{}` connected", user_agent.as_str());
@@ -45,7 +50,7 @@ async fn sse_handler(
     //     .map(Ok)
     //     .throttle(Duration::from_secs(1));
     let (tx_msg, rx_msg) = mpsc::unbounded_channel();
-    tokio::spawn(event_loop(app_state, tx_msg));
+    tokio::spawn(event_loop(app_state, tx_msg, token.id));
     let receiver_stream = tokio_stream::wrappers::UnboundedReceiverStream::from(rx_msg);
     Sse::new(receiver_stream).keep_alive(
         axum::response::sse::KeepAlive::new()
@@ -54,16 +59,76 @@ async fn sse_handler(
     )
 }
 
-async fn event_loop(_app_state: AppState, mut tx_msg: UnboundedSender<Result<Event, Infallible>>) {
+async fn event_loop(app_state: AppState, tx_msg: UnboundedSender<Result<Event, Infallible>>, current_uid: i32) {
+    let mut heartbeat = tokio::time::interval_at(
+        Instant::now() + Duration::from_secs(15),
+        Duration::from_secs(15),
+    );
+    let mut receiver = app_state.event_sender.subscribe();
+    loop {
+        tokio::select! {
+            res = receiver.recv() =>{
+                match res {
+                    Ok(event) => {
+                        match &*event{
+                            BroadcastEvent::Chat{ targets,message } => {
+                                if !targets.contains(&current_uid){
+                                    continue;
+                                }
+                                let event = Event::default().json_data(Message::ChatMessage(message.clone())).expect("fail to transfer event to json");
+                                if tx_msg.send(Ok(event)).is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            _ = heartbeat.tick() =>{
+                let event = Event::default().json_data(Message::Heartbeat(HeartbeatMessage{time:Local::now()})).expect("fail to transfer event to json");
+                if tx_msg.send(Ok(event)).is_err() {
+                    break;
+                }
+            }
+
+        }
+    }
+}
+
+async fn event_loop_demo(_app_state: AppState, tx_msg: UnboundedSender<Result<Event, Infallible>>) {
     loop {
         sleep(Duration::from_secs(1)).await;
-        let event = MessageEvent { msg: "Hello World!".to_string() };
+        let event = ChatMessage {
+            mid: 1,
+            payload: ChatMessagePayload {
+                from_uid: 0,
+                to_uid: 0,
+                create_time: Default::default(),
+                msg: "".to_string(),
+            },
+        };
         let result = Event::default().json_data(event).expect("fail to transfer event to json");
         tx_msg.send(Ok(result)).expect("send failed");
     }
 }
 
-#[derive(Serialize)]
-struct MessageEvent {
-    msg: String,
+#[derive(Debug, Clone, Serialize)]
+pub enum Message {
+    ChatMessage(ChatMessage),
+    Heartbeat(HeartbeatMessage),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HeartbeatMessage {
+    pub time: DateTime<Local>,
+}
+
+#[derive(Debug, Clone)]
+pub enum BroadcastEvent {
+    /// Chat message
+    Chat {
+        targets: BTreeSet<i32>,
+        message: ChatMessage,
+    },
 }
