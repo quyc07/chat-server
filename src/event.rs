@@ -14,12 +14,12 @@ use futures::Stream;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::time::{Instant, sleep};
+use tokio::time::Instant;
 use tower_http::services::ServeDir;
 
 use crate::app_state::AppState;
 use crate::auth::Token;
-use crate::user::{ChatMessage, ChatMessagePayload};
+use crate::user::ChatMessage;
 
 pub struct EventApi;
 
@@ -96,23 +96,6 @@ async fn event_loop(app_state: AppState, tx_msg: UnboundedSender<Result<Event, I
     }
 }
 
-async fn event_loop_demo(_app_state: AppState, tx_msg: UnboundedSender<Result<Event, Infallible>>) {
-    loop {
-        sleep(Duration::from_secs(1)).await;
-        let event = ChatMessage {
-            mid: 1,
-            payload: ChatMessagePayload {
-                from_uid: 0,
-                to_uid: 0,
-                create_time: Default::default(),
-                msg: "".to_string(),
-            },
-        };
-        let result = Event::default().json_data(event).expect("fail to transfer event to json");
-        tx_msg.send(Ok(result)).expect("send failed");
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub enum Message {
     ChatMessage(ChatMessage),
@@ -121,7 +104,7 @@ pub enum Message {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HeartbeatMessage {
-    pub time: DateTime<Local>,
+    time: DateTime<Local>,
 }
 
 #[derive(Debug, Clone)]
