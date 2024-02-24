@@ -42,13 +42,8 @@ async fn event_handler(
 ) -> Sse<impl Stream<Item=Result<Event, Infallible>>> {
     println!("`{}` connected", user_agent.as_str());
 
-    // A `Stream` that repeats an event every second
-    //
     // You can also create streams from tokio channels using the wrappers in
     // https://docs.rs/tokio-stream
-    // let stream = stream::repeat_with(|| Event::default().data("hi!"))
-    //     .map(Ok)
-    //     .throttle(Duration::from_secs(1));
     let (tx_msg, rx_msg) = mpsc::unbounded_channel();
     tokio::spawn(event_loop(app_state, tx_msg, token.id));
     let receiver_stream = tokio_stream::wrappers::UnboundedReceiverStream::from(rx_msg);
