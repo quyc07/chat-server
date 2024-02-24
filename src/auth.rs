@@ -157,11 +157,10 @@ mod test {
     use serde::{Deserialize, Serialize};
     use sha2::Sha256;
 
-    use crate::auth::{AuthError, KEYS, Keys, Token};
+    use crate::auth::{AuthError, KEYS, Token};
 
     #[test]
     fn test_token() {
-        let keys = Keys::new("abc".as_bytes());
         let token = Token {
             id: 0,
             name: "name".to_string(),
@@ -198,7 +197,6 @@ mod test {
 
     #[test]
     fn test_token_custom_expire() {
-        let keys = Keys::new("123".as_bytes());
         let token_with_data = TokenWithData {
             data: String::from("abc"),
             expired_at: Local::now() + Duration::from_secs(100),
