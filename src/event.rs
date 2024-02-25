@@ -68,7 +68,10 @@ async fn event_loop(app_state: AppState, tx_msg: UnboundedSender<Result<Event, I
                     Ok(event) => {
                         match &*event{
                             BroadcastEvent::Chat{ targets,message } => {
-                                if !targets.contains(&current_uid){
+                                if !targets.contains(&current_uid) {
+                                    continue;
+                                }
+                                if message.payload.from_uid == current_uid {
                                     continue;
                                 }
                                 let chat = Message::ChatMessage(message.clone());

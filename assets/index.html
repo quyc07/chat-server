@@ -70,13 +70,13 @@
     </div>
 
     <script>
-        let token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MSwibmFtZSI6ImFuZHkiLCJlbWFpbCI6ImFuZHlAMTYzLmNvbSIsInBob25lIjoiMTg5MTE4NzU0OTMiLCJleHAiOjE3MDg4Njc5MjN9.aKbbP_3Fa0tsG8ihWxXxpu1aXOZ3dT4wMKV3yfWNwjE";
+        let token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MSwibmFtZSI6ImFuZHkiLCJlbWFpbCI6ImFuZHlAMTYzLmNvbSIsInBob25lIjoiMTg5MTE4NzU0OTMiLCJleHAiOjE3MDg4Njg3ODd9.KkWp-UfurBHGKWNbR7NBP8E_JerNW8GHBCeWDJUZVjw";
         function sendMessage() {
             const input = document.getElementById('messageInput');
             const message = input.value.trim();
             if (message) {
                 // 暂定都发送给1用户
-                fetch('/user/1/send', {
+                fetch('/user/2/send', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
