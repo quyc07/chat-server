@@ -19,7 +19,7 @@ use tokio::time::Instant;
 use tower_http::services::ServeDir;
 
 use crate::app_state::AppState;
-use crate::auth::{QueryToken, Token};
+use crate::auth::Token;
 use crate::user::ChatMessage;
 
 pub struct EventApi;
