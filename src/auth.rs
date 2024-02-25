@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::ops::Add;
 use std::time::Duration;
 
 use axum::{async_trait, RequestPartsExt};
-use axum::extract::FromRequestParts;
+use axum::extract::{FromRequest, FromRequestParts};
 use axum::http::request::Parts;
 use axum::Router;
 use axum::routing::post;
@@ -13,7 +14,9 @@ use chrono::{DateTime, Local};
 use jsonwebtoken::{decode, DecodingKey, encode, EncodingKey, Header, TokenData, Validation};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
 use thiserror::Error;
+use validator::Validate;
 
 use entity::user;
 
@@ -56,15 +59,22 @@ impl<S> FromRequestParts<S> for Token
     type Rejection = ServerError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // Extract the token from the authorization header
-        let TypedHeader(Authorization(bearer)) = parts
+        match parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
-            .await
-            .map_err(|_| AuthError::InvalidToken)?;
-        // Decode the user data，同时校验exp是否过期
-        let token_data = parse_token(bearer.token()).await?;
-
-        Ok(token_data.claims)
+            .await {
+            Ok(TypedHeader(Authorization(bearer))) => {
+                let token_data = parse_token(bearer.token()).await?;
+                Ok(token_data.claims)
+            }
+            Err(_) => {
+                let query = parts.uri.query().unwrap_or_default();
+                let value: HashMap<String, String> = serde_html_form::from_str(query)
+                    .map_err(|_| AuthError::InvalidToken)?;
+                let token = value.get("token").ok_or(AuthError::InvalidToken).unwrap().as_str();
+                let token_data = parse_token(token).await?;
+                Ok(token_data.claims)
+            }
+        }
     }
 }
 

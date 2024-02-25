@@ -83,7 +83,7 @@
             }
         }
 
-        var eventSource = new EventSource('/event/stream');
+        var eventSource = new EventSource('/event/stream?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MSwibmFtZSI6ImFuZHkiLCJlbWFpbCI6ImFuZHlAMTYzLmNvbSIsInBob25lIjoiMTg5MTE4NzU0OTMiLCJleHAiOjE3MDg4NjcwMjZ9.HPQPs_5eV1HRjQR_cZOJZ5ZVuNC7ErtpQtT5dVdmB-Q');
         eventSource.addEventListener('Chat', function (event) {
             const data = JSON.parse(event.data);
             displayMessage(data.ChatMessage.payload.msg, 'received');

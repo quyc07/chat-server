@@ -19,6 +19,7 @@ use tokio::time::Instant;
 use tower_http::services::ServeDir;
 
 use crate::app_state::AppState;
+use crate::auth::{QueryToken, Token};
 use crate::user::ChatMessage;
 
 pub struct EventApi;
@@ -37,7 +38,7 @@ impl EventApi {
 
 async fn event_handler(
     State(app_state): State<AppState>,
-    // token: Token, sse无法通过header传递，需要通过query传递，需提供一个从query解析的QueryToken同该接口使用
+    token: Token, // sse无法通过header传递，需要通过query传递，需提供一个从query解析的QueryToken同该接口使用
     TypedHeader(user_agent): TypedHeader<headers::UserAgent>,
 ) -> Sse<impl Stream<Item=Result<Event, Infallible>>> {
     println!("`{}` connected", user_agent.as_str());
@@ -45,7 +46,7 @@ async fn event_handler(
     // You can also create streams from tokio channels using the wrappers in
     // https://docs.rs/tokio-stream
     let (tx_msg, rx_msg) = mpsc::unbounded_channel();
-    tokio::spawn(event_loop(app_state, tx_msg, 1));// 临时使用1
+    tokio::spawn(event_loop(app_state, tx_msg, token.id));// 临时使用1
     let receiver_stream = tokio_stream::wrappers::UnboundedReceiverStream::from(rx_msg);
     Sse::new(receiver_stream).keep_alive(
         axum::response::sse::KeepAlive::new()
