@@ -93,7 +93,7 @@ impl From<AuthError> for String {
 pub struct TokenApi;
 
 impl TokenApi {
-    pub async fn route(app_state: AppState) -> Router {
+    pub fn route(app_state: AppState) -> Router {
         Router::new()
             .route("/renew", post(renew))
             .with_state(app_state)

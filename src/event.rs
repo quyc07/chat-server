@@ -24,7 +24,7 @@ use crate::user::{ChatMessage, ChatMessagePayload};
 pub struct EventApi;
 
 impl EventApi {
-    pub async fn route(app_state: AppState) -> Router {
+    pub fn route(app_state: AppState) -> Router {
         let assets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
         let static_files_service = ServeDir::new(assets_dir).append_index_html_on_directories(true);
         // build our application with a route

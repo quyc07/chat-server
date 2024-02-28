@@ -25,7 +25,7 @@ use crate::validate::ValidatedJson;
 pub struct UserApi;
 
 impl UserApi {
-    pub async fn route(app_state: AppState) -> Router {
+    pub fn route(app_state: AppState) -> Router {
         Router::new()
             .route("/register", post(register))
             .route("/all", get(all))

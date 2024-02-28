@@ -20,9 +20,9 @@ async fn main() {
     Migrator::up(&app_state.db, None).await.expect("fail to apply migrations");
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
-        .nest("/user", UserApi::route(app_state.clone()).await)
-        .nest("/token", TokenApi::route(app_state.clone()).await)
-        .nest("/event", EventApi::route(app_state.clone()).await)
+        .nest("/user", UserApi::route(app_state.clone()))
+        .nest("/token", TokenApi::route(app_state.clone()))
+        .nest("/event", EventApi::route(app_state.clone()))
         ;
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
