@@ -1,1 +1,117 @@
-<script src='event/script.js'></script>
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat App</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column-reverse;
+            padding: 10px;
+            overflow-y: auto;
+        }
+
+        .message {
+            margin: 5px;
+            padding: 10px;
+            background-color: #f3f3f3;
+            border-radius: 10px;
+            max-width: 60%;
+        }
+
+        .sent {
+            align-self: flex-end;
+            background-color: #dcf8c6;
+        }
+
+        .received {
+            align-self: flex-start;
+        }
+
+        .chat-input {
+            display: flex;
+            padding: 10px;
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 10px;
+            margin-right: 10px;
+            font-size: 16px;
+        }
+
+        .chat-input button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="chat-container" id="chatContainer">
+        <!-- Messages will be displayed here -->
+    </div>
+    <div class="chat-input">
+        <input type="text" id="messageInput" placeholder="Type a message...">
+        <button onclick="sendMessage()">Send</button>
+    </div>
+
+    <script>
+        let token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6MSwibmFtZSI6ImFuZHkiLCJlbWFpbCI6ImFuZHlAMTYzLmNvbSIsInBob25lIjoiMTg5MTE4NzU0OTMiLCJleHAiOjE3MDg4Njg3ODd9.KkWp-UfurBHGKWNbR7NBP8E_JerNW8GHBCeWDJUZVjw";
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            if (message) {
+                // 暂定都发送给1用户
+                fetch('/user/2/send', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}` // Assuming token is defined and holds the JWT token for authorization
+                    },
+                    body: JSON.stringify({ 'msg':message })
+                })
+                .then(response => response.json())
+                .then(data => console.log('Message sent successfully:', data))
+                .catch((error) => {
+                    console.error('Error sending message:', error);
+                });
+                displayMessage(message, 'sent');
+                // const messageElement = document.createElement('div');
+                // messageElement.classList.add('message', 'sent');
+                // messageElement.textContent = message;
+                // document.getElementById('chatContainer').prepend(messageElement);
+                input.value = ''; // Clear input after sending
+            }
+        }
+
+        let eventSource = new EventSource('/event/stream?token=' + token);
+        eventSource.addEventListener('Chat', function (event) {
+            const data = JSON.parse(event.data);
+            displayMessage(data.ChatMessage.payload.msg, 'received');
+        });
+
+
+        function displayMessage(message, type) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', type);
+            messageElement.textContent = message;
+            document.getElementById('chatContainer').prepend(messageElement);
+        }
+    </script>
+</body>
+
+</html>

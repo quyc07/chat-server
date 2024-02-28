@@ -143,7 +143,6 @@ async fn get_history_msg(State(app_state): State<AppState>,
                          token: Token) -> Res<Vec<ChatMessagePayload>> {
     let msgs = app_state.msg_db.lock().unwrap().messages()
         .fetch_dm_messages_before(token.id as i64, uid.0 as i64, None, 1000)?;
-    // .fetch_user_messages_after(uid.0 as i64, None, 1000)?;
     let msg = msgs.into_iter()
         .filter_map(|(_, msg)| serde_json::from_slice::<ChatMessagePayload>(&msg).ok())
         .collect();
@@ -169,7 +168,7 @@ async fn history(
         .filter_map(|(id, data)| {
             Some(id).zip(serde_json::from_slice::<ChatMessagePayload>(&data).ok())
         })
-        .map(|(id, payload)| ChatMessage { mid: id, payload })
+        .map(|(id, payload)| ChatMessage::new(id, payload))
         .collect::<Vec<ChatMessage>>();
     let mut target_uid_2_msg = chat_messages.into_iter().into_group_map_by(|x| {
         if x.payload.from_uid == token.id { x.payload.to_uid } else { x.payload.from_uid }
