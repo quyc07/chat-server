@@ -10,9 +10,12 @@ use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, Qu
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
+use utoipa::{OpenApi, ToSchema};
+use utoipa_swagger_ui::SwaggerUi;
 use validator::Validate;
 
 use entity::prelude::User;
+use entity::sea_orm_active_enums::Status;
 use entity::user;
 
 use crate::{AppRes, auth, Res};
@@ -22,6 +25,18 @@ use crate::err::{ErrPrint, ServerError};
 use crate::event::BroadcastEvent;
 use crate::validate::ValidatedJson;
 
+#[derive(OpenApi)]
+#[openapi(
+paths(
+register
+),
+components(
+schemas(UserRegisterReq, UserRes)
+),
+tags(
+(name = "user", description = "USER API")
+)
+)]
 pub struct UserApi;
 
 impl UserApi {
@@ -37,7 +52,7 @@ impl UserApi {
     }
 }
 
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize, Validate, ToSchema)]
 struct UserRegisterReq {
     #[validate(length(min = 1))]
     name: String,
@@ -69,7 +84,17 @@ async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<user::Model
     Ok(AppRes::success(model))
 }
 
-async fn register(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJson<UserRegisterReq>) -> Res<user::Model> {
+/// Register User.
+///
+/// Register User and return the User.
+#[utoipa::path(
+post,
+path = "/register",
+responses(
+(status = 200, description = "Register User and return the User successfully", body = [UserRes])
+)
+)]
+async fn register(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJson<UserRegisterReq>) -> Res<UserRes> {
     let name = req.name.as_str();
     if find_by_name(&app_state, name).await?.is_some() {
         return Err(ServerError::from(UserErr::UserNameExist(name.to_string())));
@@ -86,7 +111,36 @@ async fn register(State(app_state): State<AppState>, ValidatedJson(req): Validat
         status: ActiveValue::NotSet,
     };
     let model = user.insert(&app_state.db).await?;
-    Ok(AppRes::success(model))
+    Ok(AppRes::success(UserRes::from(model)))
+}
+
+/// The new user.
+#[derive(Serialize, Deserialize, ToSchema)]
+struct UserRes {
+    pub id: i32,
+    #[schema(example = "User Name")]
+    pub name: String,
+    pub email: String,
+    pub phone: Option<String>,
+    pub password: String,
+    pub create_time: chrono::NaiveDateTime,
+    pub update_time: Option<chrono::NaiveDateTime>,
+    pub status: String,
+}
+
+impl From<user::Model> for UserRes {
+    fn from(value: user::Model) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            email: value.email,
+            phone: value.phone,
+            password: value.password,
+            create_time: value.create_time,
+            update_time: value.update_time,
+            status: value.status.into(),
+        }
+    }
 }
 
 async fn login(State(app_state): State<AppState>, ValidatedJson(req): ValidatedJson<UserLoginReq>) -> Res<UserLoginRes> {

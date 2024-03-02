@@ -11,3 +11,12 @@ pub enum Status {
     #[sea_orm(string_value = "FREEZE")]
     Freeze,
 }
+
+impl From<Status> for String {
+    fn from(value: Status) -> Self {
+        match value {
+            Status::Normal => "Normal",
+            Status::Freeze => "Freeze",
+        }.to_string()
+    }
+}

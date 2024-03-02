@@ -2,6 +2,8 @@ use axum::Router;
 use axum::routing::get;
 use tokio::net::TcpListener;
 use tracing::info;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::{SwaggerUi, Url};
 
 use chat_server::app_state::AppState;
 use chat_server::auth::TokenApi;
@@ -19,6 +21,11 @@ async fn main() {
     // Apply all pending migrations
     Migrator::up(&app_state.db, None).await.expect("fail to apply migrations");
     let app = Router::new()
+        .merge(SwaggerUi::new("/swagger-ui").urls(
+            vec![
+                (Url::new("User Api", "/api-docs/openapi.json"), UserApi::openapi())
+            ]
+        ))
         .route("/", get(|| async { "Hello, World!" }))
         .nest("/user", UserApi::route(app_state.clone()))
         .nest("/token", TokenApi::route(app_state.clone()))
