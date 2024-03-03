@@ -1,5 +1,5 @@
-use axum::Router;
 use axum::routing::get;
+use axum::Router;
 use tokio::net::TcpListener;
 use tracing::info;
 use utoipa::OpenApi;
@@ -19,22 +19,20 @@ async fn main() {
     info!("chat server start begin!");
     let app_state = AppState::new().await.unwrap();
     // Apply all pending migrations
-    Migrator::up(&app_state.db, None).await.expect("fail to apply migrations");
+    Migrator::up(&app_state.db, None)
+        .await
+        .expect("fail to apply migrations");
     let app = Router::new()
-        .merge(SwaggerUi::new("/swagger-ui").urls(
-            vec![
-                (Url::new("User Api", "/api-docs/openapi.json"), UserApi::openapi())
-            ]
-        ))
+        .merge(SwaggerUi::new("/swagger-ui").urls(vec![(
+            Url::new("User Api", "/api-docs/openapi.json"),
+            UserApi::openapi(),
+        )]))
         .route("/", get(|| async { "Hello, World!" }))
         .nest("/user", UserApi::route(app_state.clone()))
         .nest("/token", TokenApi::route(app_state.clone()))
-        .nest("/event", EventApi::route(app_state.clone()))
-        ;
+        .nest("/event", EventApi::route(app_state.clone()));
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
     info!("chat server started!");
     axum::serve(listener, app).await.unwrap();
 }
-
-

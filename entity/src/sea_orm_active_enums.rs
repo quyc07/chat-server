@@ -17,6 +17,7 @@ impl From<Status> for String {
         match value {
             Status::Normal => "Normal",
             Status::Freeze => "Freeze",
-        }.to_string()
+        }
+        .to_string()
     }
 }

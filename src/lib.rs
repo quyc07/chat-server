@@ -7,13 +7,13 @@ use serde::Serialize;
 
 use crate::err::ServerError;
 
-pub mod user;
 pub mod app_state;
-pub mod err;
-pub mod validate;
-pub mod log;
 pub mod auth;
+pub mod err;
 pub mod event;
+pub mod log;
+pub mod user;
+pub mod validate;
 
 // Create our own JSON extractor by wrapping `axum::Json`. This makes it easy to override the
 // rejection and provide our own which formats errors to match our application.

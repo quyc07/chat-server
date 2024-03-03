@@ -7,7 +7,8 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
-        db.execute_unprepared("
+        db.execute_unprepared(
+            "
         CREATE TABLE `user` (
           `id` int NOT NULL AUTO_INCREMENT,
           `name` varchar(255) NOT NULL,
@@ -19,7 +20,9 @@ impl MigrationTrait for Migration {
           `status` enum('NORMAL','FREEZE') NOT NULL DEFAULT 'NORMAL' COMMENT '状态：正常，冻结',
           PRIMARY KEY (`id`)
         ) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
-        ").await?;
+        ",
+        )
+        .await?;
         Ok(())
     }
 

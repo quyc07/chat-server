@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use axum::extract::State;
-use axum::response::Sse;
 use axum::response::sse::Event;
-use axum::Router;
+use axum::response::Sse;
 use axum::routing::get;
+use axum::Router;
 use axum_extra::{headers, TypedHeader};
 use chrono::{DateTime, Local};
 use futures::Stream;
@@ -40,13 +40,13 @@ async fn event_handler(
     State(app_state): State<AppState>,
     token: Token, // sse无法通过header传递，需要通过query传递，需提供一个从query解析的QueryToken同该接口使用
     TypedHeader(user_agent): TypedHeader<headers::UserAgent>,
-) -> Sse<impl Stream<Item=Result<Event, Infallible>>> {
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     println!("`{}` connected", user_agent.as_str());
 
     // You can also create streams from tokio channels using the wrappers in
     // https://docs.rs/tokio-stream
     let (tx_msg, rx_msg) = mpsc::unbounded_channel();
-    tokio::spawn(event_loop(app_state, tx_msg, token.id));// 临时使用1
+    tokio::spawn(event_loop(app_state, tx_msg, token.id)); // 临时使用1
     let receiver_stream = tokio_stream::wrappers::UnboundedReceiverStream::from(rx_msg);
     Sse::new(receiver_stream).keep_alive(
         axum::response::sse::KeepAlive::new()
@@ -55,7 +55,11 @@ async fn event_handler(
     )
 }
 
-async fn event_loop(app_state: AppState, tx_msg: UnboundedSender<Result<Event, Infallible>>, current_uid: i32) {
+async fn event_loop(
+    app_state: AppState,
+    tx_msg: UnboundedSender<Result<Event, Infallible>>,
+    current_uid: i32,
+) {
     let mut heartbeat = tokio::time::interval_at(
         Instant::now() + Duration::from_secs(5),
         Duration::from_secs(15),
@@ -106,10 +110,14 @@ pub enum Message {
 // 也可以使用strum库来实现
 impl Display for Message {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", match self {
-            Message::ChatMessage(_) => "Chat",
-            Message::Heartbeat(_) => "Heartbeat",
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                Message::ChatMessage(_) => "Chat",
+                Message::Heartbeat(_) => "Heartbeat",
+            }
+        )
     }
 }
 
