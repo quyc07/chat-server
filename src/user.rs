@@ -4,7 +4,7 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::routing::{get, post};
 use axum::Router;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDateTime};
 use itertools::Itertools;
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
@@ -76,10 +76,12 @@ pub enum UserErr {
 
 impl ErrPrint for UserErr {}
 
-async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<user::Model>> {
+async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<UserRes>> {
     let result = User::find().all(&app_state.db).await;
     let model = result.unwrap();
-    Ok(AppRes::success(model))
+    Ok(AppRes::success(
+        model.into_iter().map(UserRes::from).collect(),
+    ))
 }
 
 /// Register User.
@@ -126,9 +128,82 @@ struct UserRes {
     pub email: String,
     pub phone: Option<String>,
     pub password: String,
-    pub create_time: String,
-    pub update_time: Option<String>,
+    #[serde(with = "my_date_format")]
+    pub create_time: NaiveDateTime,
+    #[serde(with = "my_opt_date_format")]
+    pub update_time: Option<NaiveDateTime>,
     pub status: String,
+}
+
+/// 自定义 Option<DateTime> 序列化
+mod my_opt_date_format {
+    use chrono::NaiveDateTime;
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    const FORMAT: &'static str = "%Y-%m-%d %H:%M:%S";
+
+    pub type OK = ();
+
+    pub fn serialize<S>(date: &Option<NaiveDateTime>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match date {
+            None => serializer.serialize_none(),
+            Some(t) => serializer.serialize_str(t.format(FORMAT).to_string().as_str()),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<NaiveDateTime>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match String::deserialize(deserializer) {
+            Ok(s) => Ok(Some(
+                NaiveDateTime::parse_from_str(&s, FORMAT).map_err(serde::de::Error::custom)?,
+            )),
+            Err(_) => Ok(None),
+        }
+    }
+}
+
+/// 自定义 DateTime 序列化
+mod my_date_format {
+    use chrono::NaiveDateTime;
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    const FORMAT: &'static str = "%Y-%m-%d %H:%M:%S";
+
+    // The signature of a serialize_with function must follow the pattern:
+    //
+    //    fn serialize<S>(&T, S) -> Result<S::Ok, S::Error>
+    //    where
+    //        S: Serializer
+    //
+    // although it may also be generic over the input types T.
+    pub fn serialize<S>(date: &NaiveDateTime, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = format!("{}", date.format(FORMAT));
+        serializer.serialize_str(&s)
+    }
+
+    // The signature of a deserialize_with function must follow the pattern:
+    //
+    //    fn deserialize<'de, D>(D) -> Result<T, D::Error>
+    //    where
+    //        D: Deserializer<'de>
+    //
+    // although it may also be generic over the output types T.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<NaiveDateTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let dt = NaiveDateTime::parse_from_str(&s, FORMAT).map_err(serde::de::Error::custom)?;
+        Ok(dt)
+    }
 }
 
 impl From<user::Model> for UserRes {
@@ -139,10 +214,8 @@ impl From<user::Model> for UserRes {
             email: value.email,
             phone: value.phone,
             password: value.password,
-            create_time: value.create_time.format("yyyy-MM-dd HH:mm:ss").to_string(),
-            update_time: value
-                .update_time
-                .map(|t| t.format("yyyy-MM-dd HH:mm:ss").to_string()),
+            create_time: value.create_time,
+            update_time: value.update_time,
             status: value.status.into(),
         }
     }

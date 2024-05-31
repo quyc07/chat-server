@@ -3,6 +3,7 @@ use std::string::ToString;
 use axum::extract::FromRequest;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, Local};
 use serde::Serialize;
 
 use crate::err::ServerError;
@@ -75,3 +76,21 @@ impl<T: Serialize> From<AppRes<T>> for String {
         serde_json::to_string(&value).unwrap()
     }
 }
+
+#[cfg(test)]
+mod test{
+    use chrono::{DateTime, Local, TimeZone, Utc};
+
+    #[test]
+    fn test_date() {
+        println!("{}", serde_json::to_string(&Local::now()).unwrap());
+        println!("{}", Local::now().format("%Y-%m-%d %H:%M:%S"));
+        let date_time: DateTime<Utc> = Utc.with_ymd_and_hms(2017, 04, 02, 12, 50, 32).unwrap();
+        let formatted = format!("{}", date_time.format("%d/%m/%Y %H:%M"));
+        let formatted1 = format!("{}", Local::now().format("%d/%m/%Y %H:%M"));
+        assert_eq!(formatted, "02/04/2017 12:50");
+        println!("{}", formatted1);
+    }
+
+}
+
