@@ -2,9 +2,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::routing::{get, post};
 use axum::Router;
-use chrono::{DateTime, Local, NaiveDateTime};
+use axum::routing::{get, post};
+use chrono::{DateTime, Local};
 use itertools::Itertools;
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
@@ -16,12 +16,14 @@ use validator::Validate;
 use entity::prelude::User;
 use entity::user;
 
+use crate::{AppRes, auth, Res};
 use crate::app_state::AppState;
 use crate::auth::{AuthError, Token};
 use crate::err::{ErrPrint, ServerError};
 use crate::event::BroadcastEvent;
+use crate::format::{datetime_format, EAST_8_OFFSET};
+use crate::format::opt_datetime_format;
 use crate::validate::ValidatedJson;
-use crate::{auth, AppRes, Res};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -128,82 +130,11 @@ struct UserRes {
     pub email: String,
     pub phone: Option<String>,
     pub password: String,
-    #[serde(with = "my_date_format")]
-    pub create_time: NaiveDateTime,
-    #[serde(with = "my_opt_date_format")]
-    pub update_time: Option<NaiveDateTime>,
+    #[serde(with = "datetime_format")]
+    pub create_time: DateTime<Local>,
+    #[serde(with = "opt_datetime_format")]
+    pub update_time: Option<DateTime<Local>>,
     pub status: String,
-}
-
-/// 自定义 Option<DateTime> 序列化
-mod my_opt_date_format {
-    use chrono::NaiveDateTime;
-    use serde::{self, Deserialize, Deserializer, Serializer};
-
-    const FORMAT: &'static str = "%Y-%m-%d %H:%M:%S";
-
-    pub type OK = ();
-
-    pub fn serialize<S>(date: &Option<NaiveDateTime>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match date {
-            None => serializer.serialize_none(),
-            Some(t) => serializer.serialize_str(t.format(FORMAT).to_string().as_str()),
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<NaiveDateTime>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        match String::deserialize(deserializer) {
-            Ok(s) => Ok(Some(
-                NaiveDateTime::parse_from_str(&s, FORMAT).map_err(serde::de::Error::custom)?,
-            )),
-            Err(_) => Ok(None),
-        }
-    }
-}
-
-/// 自定义 DateTime 序列化
-mod my_date_format {
-    use chrono::NaiveDateTime;
-    use serde::{self, Deserialize, Deserializer, Serializer};
-
-    const FORMAT: &'static str = "%Y-%m-%d %H:%M:%S";
-
-    // The signature of a serialize_with function must follow the pattern:
-    //
-    //    fn serialize<S>(&T, S) -> Result<S::Ok, S::Error>
-    //    where
-    //        S: Serializer
-    //
-    // although it may also be generic over the input types T.
-    pub fn serialize<S>(date: &NaiveDateTime, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let s = format!("{}", date.format(FORMAT));
-        serializer.serialize_str(&s)
-    }
-
-    // The signature of a deserialize_with function must follow the pattern:
-    //
-    //    fn deserialize<'de, D>(D) -> Result<T, D::Error>
-    //    where
-    //        D: Deserializer<'de>
-    //
-    // although it may also be generic over the output types T.
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<NaiveDateTime, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let dt = NaiveDateTime::parse_from_str(&s, FORMAT).map_err(serde::de::Error::custom)?;
-        Ok(dt)
-    }
 }
 
 impl From<user::Model> for UserRes {
@@ -214,8 +145,13 @@ impl From<user::Model> for UserRes {
             email: value.email,
             phone: value.phone,
             password: value.password,
-            create_time: value.create_time,
-            update_time: value.update_time,
+            create_time: DateTime::<Local>::from_naive_utc_and_offset(
+                value.create_time,
+                EAST_8_OFFSET,
+            ),
+            update_time: value
+                .update_time
+                .map(|t| DateTime::<Local>::from_naive_utc_and_offset(t, EAST_8_OFFSET)),
             status: value.status.into(),
         }
     }
