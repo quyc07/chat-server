@@ -70,8 +70,7 @@ where
                     serde_html_form::from_str(query).map_err(|_| AuthError::InvalidToken)?;
                 let token = value
                     .get("token")
-                    .ok_or(AuthError::InvalidToken)
-                    .unwrap()
+                    .ok_or(AuthError::InvalidToken)?
                     .as_str();
                 let token_data = parse_token(token).await?;
                 Ok(token_data.claims)

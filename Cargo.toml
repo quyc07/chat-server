@@ -1,4 +1,4 @@
-workspace = { members = ["entity", "migration", "msg"] }
+workspace = { members = ["entity", "migration", "msg", "utoipa"] }
 [package]
 name = "chat-server"
 version = "0.1.0"
@@ -37,6 +37,5 @@ anyhow = "1.0.79"
 sea-orm = { version = "0.12.11", features = ["sqlx-mysql", "runtime-tokio-native-tls", "macros", "debug-print"] }
 bytes = "1.5.0"
 itertools = "0.13.0"
-utoipa = { version = "4", features = ["axum_extras"] }
+utoipa = { version = "4", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "7.1.0", features = ["axum"] }
-time = { version = "0.3.31", features = ["local-offset"] }

@@ -79,8 +79,7 @@ impl<T: Serialize> From<AppRes<T>> for String {
 
 #[cfg(test)]
 mod test {
-    use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, Offset, TimeZone, Utc};
-    use time::OffsetDateTime;
+    use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, TimeZone, Utc};
 
     #[test]
     fn test_date() {

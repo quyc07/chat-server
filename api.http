@@ -1,0 +1,11 @@
+### POST 注册用户
+POST http://localhost:3000/user/register
+Content-Type: application/json
+
+{
+  "name": "andy3",
+  "email": "qaa@163.com",
+  "password": "123",
+  "phone": "18911223344"
+}
+###
