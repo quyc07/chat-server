@@ -3,7 +3,6 @@ use std::string::ToString;
 use axum::extract::FromRequest;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use chrono::{DateTime, Local};
 use serde::Serialize;
 
 use crate::err::ServerError;
@@ -80,8 +79,8 @@ impl<T: Serialize> From<AppRes<T>> for String {
 
 #[cfg(test)]
 mod test {
-    use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, TimeZone, Utc};
-    use sea_orm::ColumnType::DateTime;
+    use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, Offset, TimeZone, Utc};
+    use time::OffsetDateTime;
 
     #[test]
     fn test_date() {
@@ -103,7 +102,5 @@ mod test {
             "2024-07-16 10:00:00Z".parse::<DateTime<Local>>().unwrap()
         );
         println!("{}", FixedOffset::east_opt(8 * 3600).unwrap());
-
-        chrono::DateTime::<Local>::from_naive_utc_and_offset(timestamp_millis.unwrap(),)
     }
 }

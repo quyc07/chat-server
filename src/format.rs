@@ -1,7 +1,4 @@
-use chrono::FixedOffset;
-
-/// 东八区offset
-pub const EAST_8_OFFSET: FixedOffset = FixedOffset::east_opt(8 * 3600).unwrap();
+use chrono::Offset;
 
 /// 自定义 Option<DateTime> 序列化
 pub mod opt_native_datetime_format {
@@ -76,8 +73,7 @@ pub mod native_datetime_format {
 
 /// 自定义 Option<DateTime> 序列化
 pub mod opt_datetime_format {
-    use crate::format::EAST_8_OFFSET;
-    use chrono::{DateTime, FixedOffset, Local};
+    use chrono::{DateTime, Local, Offset};
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     const FORMAT: &'static str = "%Y-%m-%d %H:%M:%S";
@@ -99,8 +95,8 @@ pub mod opt_datetime_format {
         D: Deserializer<'de>,
     {
         match String::deserialize(deserializer) {
-            Ok(mut s) => Ok(Some(
-                format!("{} {}", s, EAST_8_OFFSET.to_string())
+            Ok(s) => Ok(Some(
+                format!("{} {}", s, Local::now().offset().fix().to_string())
                     .parse::<DateTime<Local>>()
                     .map_err(serde::de::Error::custom)?,
             )),
@@ -111,9 +107,7 @@ pub mod opt_datetime_format {
 
 /// 自定义 DateTime 序列化
 pub mod datetime_format {
-    use crate::format::EAST_8_OFFSET;
-    use chrono::format::OffsetFormat;
-    use chrono::{DateTime, FixedOffset, Local};
+    use chrono::{DateTime, Local, Offset};
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     const FORMAT: &'static str = "%Y-%m-%d %H:%M:%S";
@@ -145,7 +139,7 @@ pub mod datetime_format {
         D: Deserializer<'de>,
     {
         let mut s = String::deserialize(deserializer)?;
-        s.push_str(EAST_8_OFFSET.to_string().as_str());
+        s.push_str(Local::now().offset().fix().to_string().as_str());
         let date_time = s
             .parse::<DateTime<Local>>()
             .map_err(serde::de::Error::custom)?;

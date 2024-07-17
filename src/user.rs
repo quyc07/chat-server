@@ -2,9 +2,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::Router;
 use axum::routing::{get, post};
-use chrono::{DateTime, Local};
+use axum::Router;
+use chrono::{DateTime, Local, Offset};
 use itertools::Itertools;
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
@@ -16,14 +16,14 @@ use validator::Validate;
 use entity::prelude::User;
 use entity::user;
 
-use crate::{AppRes, auth, Res};
 use crate::app_state::AppState;
 use crate::auth::{AuthError, Token};
 use crate::err::{ErrPrint, ServerError};
 use crate::event::BroadcastEvent;
-use crate::format::{datetime_format, EAST_8_OFFSET};
+use crate::format::datetime_format;
 use crate::format::opt_datetime_format;
 use crate::validate::ValidatedJson;
+use crate::{auth, AppRes, Res};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -147,11 +147,11 @@ impl From<user::Model> for UserRes {
             password: value.password,
             create_time: DateTime::<Local>::from_naive_utc_and_offset(
                 value.create_time,
-                EAST_8_OFFSET,
+                Local::now().offset().fix(),
             ),
-            update_time: value
-                .update_time
-                .map(|t| DateTime::<Local>::from_naive_utc_and_offset(t, EAST_8_OFFSET)),
+            update_time: value.update_time.map(|t| {
+                DateTime::<Local>::from_naive_utc_and_offset(t, Local::now().offset().fix())
+            }),
             status: value.status.into(),
         }
     }
