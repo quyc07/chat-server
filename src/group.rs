@@ -1,25 +1,25 @@
-use crate::app_state::AppState;
-use crate::auth::Token;
-use crate::user::UserApi;
-use crate::validate::ValidatedJson;
-use crate::{AppRes, Res};
-use axum::extract::State;
-use axum::routing::{delete, get, post, put};
+use axum::extract::{Query, State};
 use axum::Router;
-use entity::group;
-use entity::group::Model;
-use entity::prelude::{Group, User};
+use axum::routing::{get, post};
+use sea_orm::{ActiveModelTrait, EntityTrait};
 use sea_orm::ActiveValue::Set;
-use sea_orm::{ActiveModelTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
-use utoipa::openapi::SchemaFormat;
 use utoipa::{OpenApi, ToSchema};
 use validator::Validate;
+
+use entity::{group, user_group_rel};
+use entity::group::Model;
+use entity::prelude::Group;
+
+use crate::{AppRes, Res};
+use crate::app_state::AppState;
+use crate::auth::Token;
+use crate::validate::ValidatedJson;
 
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        all,create
+        all,create,add
     ),
     components(
         schemas(AllRes,CreateReq)
@@ -35,7 +35,7 @@ impl GroupApi {
         Router::new()
             .route("/all", get(all))
             .route("/create", post(create))
-            // .route("/:gid/add/:uid/", put(add))
+            .route("/add", get(add))
             // .route("/:gid/remove/:gid", delete(remove))
             .with_state(app_state)
     }
@@ -100,4 +100,29 @@ async fn create(
     };
     let group = group.insert(&app_state.db).await?;
     Ok(AppRes::success(group.id))
+}
+
+#[derive(Deserialize, ToSchema)]
+struct AddReq {
+    gid: i32,
+    uid: i32,
+}
+
+#[utoipa::path(
+    put,
+    path = "/group/add",
+    responses(
+        (status = 200, description = "Add user to group", body = [()]),
+    )
+)]
+async fn add(State(app_state): State<AppState>, _: Token, Query(req): Query<AddReq>) -> Res<()> {
+    let rel = user_group_rel::ActiveModel {
+        id: Default::default(),
+        group_id: Set(req.gid),
+        use_id: Set(req.uid),
+        c_time: Default::default(),
+        can_replay: Default::default(),
+    };
+    rel.insert(&app_state.db).await?;
+    Ok(AppRes::success(()))
 }
