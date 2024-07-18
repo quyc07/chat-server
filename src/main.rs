@@ -8,6 +8,7 @@ use utoipa_swagger_ui::{SwaggerUi, Url};
 use chat_server::app_state::AppState;
 use chat_server::auth::TokenApi;
 use chat_server::event::EventApi;
+use chat_server::group::GroupApi;
 use chat_server::log;
 use chat_server::user::UserApi;
 use migration::{Migrator, MigratorTrait};
@@ -29,6 +30,7 @@ async fn main() {
         )]))
         .route("/", get(|| async { "Hello, World!" }))
         .nest("/user", UserApi::route(app_state.clone()))
+        .nest("/group", GroupApi::route(app_state.clone()))
         .nest("/token", TokenApi::route(app_state.clone()))
         .nest("/event", EventApi::route(app_state.clone()));
 
