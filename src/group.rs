@@ -36,6 +36,8 @@ impl GroupApi {
             .route("/all", get(all))
             .route("/create", post(create))
             .route("/add", get(add))
+            // TODO 为什么这么写会404？
+            // .route("/:gid/add/:uid", get(add))
             // .route("/:gid/remove/:gid", delete(remove))
             .with_state(app_state)
     }
