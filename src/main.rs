@@ -25,7 +25,7 @@ async fn main() {
         .await
         .expect("fail to apply migrations");
     let app = Router::new()
-        .merge(swagger_ui())
+        .merge(swagger_ui().await)
         .route("/", get(|| async { "Hello, World!" }))
         .nest("/user", UserApi::route(app_state.clone()))
         .nest("/group", GroupApi::route(app_state.clone()))
