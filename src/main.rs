@@ -10,6 +10,7 @@ use chat_server::auth::TokenApi;
 use chat_server::event::EventApi;
 use chat_server::group::GroupApi;
 use chat_server::log;
+use chat_server::open_api::swagger_ui;
 use chat_server::user::UserApi;
 use migration::{Migrator, MigratorTrait};
 
@@ -24,10 +25,7 @@ async fn main() {
         .await
         .expect("fail to apply migrations");
     let app = Router::new()
-        .merge(SwaggerUi::new("/swagger-ui").urls(vec![(
-            Url::new("User Api", "/api-docs/openapi.json"),
-            UserApi::openapi(),
-        )]))
+        .merge(swagger_ui())
         .route("/", get(|| async { "Hello, World!" }))
         .nest("/user", UserApi::route(app_state.clone()))
         .nest("/group", GroupApi::route(app_state.clone()))
