@@ -8,7 +8,7 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub group_id: i32,
-    pub use_id: i32,
+    pub user_id: i32,
     pub c_time: DateTime,
     pub can_replay: i8,
 }

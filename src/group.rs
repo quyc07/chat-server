@@ -1,6 +1,6 @@
 use axum::extract::{Path, State};
 use axum::Router;
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter};
 use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,7 @@ impl GroupApi {
             .route("/all", get(all))
             .route("/create", post(create))
             .route("/:gid/add/:uid", put(add))
-            // .route("/:gid/remove/:gid", delete(remove))
+            .route("/:gid/remove/:uid", delete(remove))
             .with_state(app_state)
     }
 }
@@ -108,6 +108,12 @@ struct AddReq {
     uid: i32,
 }
 
+#[derive(Deserialize, ToSchema)]
+struct RemoveReq {
+    gid: i32,
+    uid: i32,
+}
+
 #[utoipa::path(
     put,
     path = "/:gid/add/:uid",
@@ -133,7 +139,7 @@ async fn add(State(app_state): State<AppState>, Path(req): Path<AddReq>, _: Toke
     let rel = user_group_rel::ActiveModel {
         id: Default::default(),
         group_id: Set(req.gid),
-        use_id: Set(req.uid),
+        user_id: Set(req.uid),
         c_time: Default::default(),
         can_replay: Default::default(),
     };
@@ -152,8 +158,33 @@ async fn exist(p0: i32, app_state: &AppState) -> Result<bool, DbErr> {
 async fn is_in_group(gid: i32, uid: i32, app_state: &AppState) -> Result<bool, DbErr> {
     UserGroupRel::find()
         .filter(user_group_rel::Column::GroupId.eq(gid))
-        .filter(user_group_rel::Column::UseId.eq(uid))
+        .filter(user_group_rel::Column::UserId.eq(uid))
         .one(&app_state.db)
         .await
         .map(|t| t.is_some())
+}
+
+async fn remove(
+    State(app_state): State<AppState>,
+    Path(req): Path<RemoveReq>,
+    _: Token,
+) -> Res<()> {
+    if !exist(req.gid, &app_state).await? {
+        return Ok(AppRes::fail_with_msg(format!("群（id={}）不存在", req.gid)));
+    }
+    if !user::exist(req.uid, &app_state).await? {
+        return Ok(AppRes::fail_with_msg(format!(
+            "用户（id={}）不存在",
+            req.uid
+        )));
+    }
+    if !is_in_group(req.gid, req.uid, &app_state).await? {
+        return Ok(AppRes::fail_with_msg("用户不在群内，无需移出".to_string()));
+    }
+    UserGroupRel::delete_many()
+        .filter(user_group_rel::Column::GroupId.eq(req.gid))
+        .filter(user_group_rel::Column::UserId.eq(req.uid))
+        .exec(&app_state.db)
+        .await?;
+    return Ok(AppRes::success(()));
 }
