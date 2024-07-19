@@ -75,8 +75,6 @@ async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<AllRes>> {
 struct CreateReq {
     #[validate(length(min = 1, message = "Group name must be at least one letter"))]
     name: String,
-    #[validate(range(min = 1, message = "Admin id must larger or equal than 1"))]
-    admin: i32,
 }
 
 #[utoipa::path(
@@ -89,13 +87,13 @@ struct CreateReq {
 )]
 async fn create(
     State(app_state): State<AppState>,
-    _: Token,
+    token: Token,
     ValidatedJson(req): ValidatedJson<CreateReq>,
 ) -> Res<i32> {
     let group = group::ActiveModel {
         id: Default::default(),
         name: Set(req.name),
-        admin: Set(req.admin),
+        admin: Set(token.id),
         c_time: Default::default(),
         u_time: Default::default(),
     };
