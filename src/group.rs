@@ -1,7 +1,9 @@
 use axum::extract::{Path, State};
 use axum::Router;
 use axum::routing::{delete, get, post, put};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter, TransactionTrait,
+};
 use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
 use utoipa::{OpenApi, ToSchema};
@@ -196,13 +198,17 @@ async fn delete_group(
     if !exist(gid, &app_state).await? {
         return Ok(AppRes::fail_with_msg(format!("群（ID={}）不存在", gid)));
     }
-    // TODO 事务如何实现？
+    // 开启事务
+    let x = app_state.db.begin().await?;
     if let Some(group) = Group::find_by_id(gid).one(&app_state.db).await? {
-        group.delete(&app_state.db).await?;
+        group.delete(&x).await?;
     }
+    // return Err(CustomErr("error happened here".to_string()));
     UserGroupRel::delete_many()
         .filter(user_group_rel::Column::GroupId.eq(gid))
-        .exec(&app_state.db)
+        .exec(&x)
         .await?;
+    // 提交事务
+    x.commit().await?;
     return Ok(AppRes::success(()));
 }
