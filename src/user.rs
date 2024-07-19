@@ -2,8 +2,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::routing::{get, post};
 use axum::Router;
+use axum::routing::{get, post};
 use chrono::{DateTime, Local, Offset};
 use itertools::Itertools;
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
@@ -16,6 +16,7 @@ use validator::Validate;
 use entity::prelude::User;
 use entity::user;
 
+use crate::{AppRes, auth, Res};
 use crate::app_state::AppState;
 use crate::auth::{AuthError, Token};
 use crate::err::{ErrPrint, ServerError};
@@ -23,7 +24,6 @@ use crate::event::BroadcastEvent;
 use crate::format::datetime_format;
 use crate::format::opt_datetime_format;
 use crate::validate::ValidatedJson;
-use crate::{auth, AppRes, Res};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -310,4 +310,12 @@ async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::M
         .filter(user::Column::Name.eq(name))
         .one(&app_state.db)
         .await
+}
+
+pub async fn exist(uid: i32, app_state: &AppState) -> Result<bool, DbErr> {
+    User::find()
+        .filter(user::Column::Id.eq(uid))
+        .one(&app_state.db)
+        .await
+        .map(|t| t.is_some())
 }

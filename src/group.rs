@@ -1,7 +1,7 @@
-use axum::extract::{Query, State};
+use axum::extract::{Path, State};
 use axum::Router;
-use axum::routing::{get, post};
-use sea_orm::{ActiveModelTrait, EntityTrait};
+use axum::routing::{get, post, put};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter};
 use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
 use utoipa::{OpenApi, ToSchema};
@@ -9,9 +9,9 @@ use validator::Validate;
 
 use entity::{group, user_group_rel};
 use entity::group::Model;
-use entity::prelude::Group;
+use entity::prelude::{Group, UserGroupRel};
 
-use crate::{AppRes, Res};
+use crate::{AppRes, Res, user};
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::validate::ValidatedJson;
@@ -35,9 +35,7 @@ impl GroupApi {
         Router::new()
             .route("/all", get(all))
             .route("/create", post(create))
-            .route("/add", get(add))
-            // TODO 为什么这么写会404？
-            // .route("/:gid/add/:uid", get(add))
+            .route("/:gid/add/:uid", put(add))
             // .route("/:gid/remove/:gid", delete(remove))
             .with_state(app_state)
     }
@@ -112,12 +110,26 @@ struct AddReq {
 
 #[utoipa::path(
     put,
-    path = "/group/add",
+    path = "/:gid/add/:uid",
     responses(
         (status = 200, description = "Add user to group", body = [()]),
     )
 )]
-async fn add(State(app_state): State<AppState>, _: Token, Query(req): Query<AddReq>) -> Res<()> {
+async fn add(State(app_state): State<AppState>, Path(req): Path<AddReq>, _: Token) -> Res<()> {
+    if !exist(req.gid, &app_state).await? {
+        return Ok(AppRes::fail_with_msg(format!("群（id={}）不存在", req.gid)));
+    }
+    if !user::exist(req.uid, &app_state).await? {
+        return Ok(AppRes::fail_with_msg(format!(
+            "用户（id={}）不存在",
+            req.uid
+        )));
+    }
+    if is_in_group(req.gid, req.uid, &app_state).await? {
+        return Ok(AppRes::success_with_msg(
+            "用户已在群内，无需再次添加".to_string(),
+        ));
+    }
     let rel = user_group_rel::ActiveModel {
         id: Default::default(),
         group_id: Set(req.gid),
@@ -127,4 +139,21 @@ async fn add(State(app_state): State<AppState>, _: Token, Query(req): Query<AddR
     };
     rel.insert(&app_state.db).await?;
     Ok(AppRes::success(()))
+}
+
+async fn exist(p0: i32, app_state: &AppState) -> Result<bool, DbErr> {
+    Group::find()
+        .filter(group::Column::Id.eq(p0))
+        .one(&app_state.db)
+        .await
+        .map(|t| t.is_some())
+}
+
+async fn is_in_group(gid: i32, uid: i32, app_state: &AppState) -> Result<bool, DbErr> {
+    UserGroupRel::find()
+        .filter(user_group_rel::Column::GroupId.eq(gid))
+        .filter(user_group_rel::Column::UseId.eq(uid))
+        .one(&app_state.db)
+        .await
+        .map(|t| t.is_some())
 }

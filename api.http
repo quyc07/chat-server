@@ -9,5 +9,8 @@ Content-Type: application/json
   "phone": "18911223344"
 }
 
-### GET 查询全部群
+### GET 添加群成员
 GET http://localhost:3000/group/add?gid=1&uid=7
+
+### GET 添加群成员
+GET http://localhost:3000/group/add/1?uid=7

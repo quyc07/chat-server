@@ -12,11 +12,11 @@ pub mod auth;
 pub mod err;
 pub mod event;
 pub mod format;
-pub mod log;
-pub mod user;
 pub mod group;
-pub mod validate;
+pub mod log;
 pub mod open_api;
+pub mod user;
+pub mod validate;
 
 // Create our own JSON extractor by wrapping `axum::Json`. This makes it easy to override the
 // rejection and provide our own which formats errors to match our application.
@@ -51,6 +51,13 @@ impl<T: Serialize> AppRes<T> {
 }
 
 impl AppRes<()> {
+    pub fn success_with_msg(msg: String) -> AppRes<()> {
+        AppRes {
+            code: SUCCESS_CODE,
+            msg,
+            data: (),
+        }
+    }
     pub fn fail_with_msg(msg: String) -> AppRes<()> {
         AppRes {
             code: FAIL_CODE,
