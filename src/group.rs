@@ -1,7 +1,7 @@
 use axum::extract::{Path, State};
 use axum::Router;
 use axum::routing::{delete, get, post, put};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter};
 use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
 use utoipa::{OpenApi, ToSchema};
@@ -37,6 +37,7 @@ impl GroupApi {
             .route("/create", post(create))
             .route("/:gid/add/:uid", put(add))
             .route("/:gid/remove/:uid", delete(remove))
+            .route("/delete/:gid", delete(delete_group))
             .with_state(app_state)
     }
 }
@@ -184,6 +185,25 @@ async fn remove(
     UserGroupRel::delete_many()
         .filter(user_group_rel::Column::GroupId.eq(req.gid))
         .filter(user_group_rel::Column::UserId.eq(req.uid))
+        .exec(&app_state.db)
+        .await?;
+    return Ok(AppRes::success(()));
+}
+
+async fn delete_group(
+    State(app_state): State<AppState>,
+    Path(gid): Path<i32>,
+    _: Token,
+) -> Res<()> {
+    if !exist(gid, &app_state).await? {
+        return Ok(AppRes::fail_with_msg(format!("群（ID={}）不存在", gid)));
+    }
+    // TODO 事务如何实现？
+    if let Some(group) = Group::find_by_id(gid).one(&app_state.db).await? {
+        group.delete(&app_state.db).await?;
+    }
+    UserGroupRel::delete_many()
+        .filter(user_group_rel::Column::GroupId.eq(gid))
         .exec(&app_state.db)
         .await?;
     return Ok(AppRes::success(()));
