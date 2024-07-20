@@ -37,9 +37,8 @@ impl GroupApi {
         Router::new()
             .route("/all", get(all))
             .route("/create", post(create))
-            .route("/:gid/add/:uid", put(add))
-            .route("/:gid/remove/:uid", delete(remove))
-            .route("/delete/:gid", delete(delete_group))
+            .route("/:gid/:uid", put(add).delete(remove))
+            .route("/:gid", delete(delete_group).get(detail))
             .with_state(app_state)
     }
 }
@@ -211,4 +210,15 @@ async fn delete_group(
     // 提交事务
     x.commit().await?;
     return Ok(AppRes::success(()));
+}
+
+#[derive(Serialize)]
+struct DetailRes {}
+
+async fn detail(
+    State(app_state): State<AppState>,
+    Path(gid): Path<i32>,
+    token: Token,
+) -> Res<DetailRes> {
+    Ok(AppRes::success(DetailRes {}))
 }
