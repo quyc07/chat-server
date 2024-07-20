@@ -1,9 +1,10 @@
 use axum::extract::{Path, State};
 use axum::Router;
-use axum::routing::{delete, post, put};
+use axum::routing::{delete, patch, post, put};
 use futures::FutureExt;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter,
+    TransactionTrait,
 };
 use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,7 @@ impl GroupApi {
             .route("/", post(create).get(all))
             .route("/:gid/:uid", put(add).delete(remove))
             .route("/:gid", delete(delete_group).get(detail))
+            .route("/:gid/admin/:uid", patch(admin))
             .with_state(app_state)
     }
 }
@@ -224,6 +226,7 @@ struct DetailRes {
 struct User {
     id: i32,
     name: String,
+    admin: bool,
 }
 
 async fn detail(
@@ -234,13 +237,7 @@ async fn detail(
     match Group::find_by_id(gid).one(&app_state.db).await? {
         None => Err(CustomErr(format!("群（id={}）不存在", gid))),
         Some(group) => {
-            let uids = UserGroupRel::find()
-                .filter(user_group_rel::Column::GroupId.eq(gid))
-                .all(&app_state.db)
-                .await?
-                .into_iter()
-                .map(|ugr| ugr.user_id)
-                .collect::<Vec<i32>>();
+            let uids = get_uids(&app_state, gid).await?;
             if !uids.contains(&token.id) {
                 return Err(CustomErr("您不在当前群！".to_string()));
             }
@@ -253,9 +250,46 @@ async fn detail(
                     .map(|u| User {
                         id: u.id,
                         name: u.name,
+                        admin: u.id == group.admin,
                     })
                     .collect(),
             }))
+        }
+    }
+}
+
+async fn get_uids(app_state: &AppState, gid: i32) -> Result<Vec<i32>, DbErr> {
+    Ok(UserGroupRel::find()
+        .filter(user_group_rel::Column::GroupId.eq(gid))
+        .all(&app_state.db)
+        .await?
+        .into_iter()
+        .map(|ugr| ugr.user_id)
+        .collect::<Vec<i32>>())
+}
+
+async fn admin(
+    State(app_state): State<AppState>,
+    Path((gid, uid)): Path<(i32, i32)>,
+    token: Token,
+) -> Res<()> {
+    match Group::find_by_id(gid).one(&app_state.db).await? {
+        None => Err(CustomErr(format!("群（id={}）不存在", gid))),
+        Some(group) => {
+            if group.admin != token.id {
+                return Err(CustomErr("您不是群管理员，不能设置群主！".to_string()));
+            }
+            let uids = get_uids(&app_state, gid).await?;
+            if !uids.contains(&uid) {
+                return Err(CustomErr(format!(
+                    "用户（id={}）不在群内，不能设置为群主",
+                    uid
+                )));
+            }
+            let mut group = group.into_active_model();
+            group.admin = Set(uid);
+            group.update(&app_state.db).await?;
+            Ok(AppRes::success(()))
         }
     }
 }
