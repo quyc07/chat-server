@@ -10,7 +10,7 @@ pub struct Model {
     pub group_id: i32,
     pub user_id: i32,
     pub c_time: DateTime,
-    pub can_replay: i8,
+    pub forbid: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -42,6 +42,7 @@ impl GroupApi {
             .route("/:gid/:uid", put(add).delete(remove))
             .route("/:gid", delete(delete_group).get(detail))
             .route("/:gid/admin/:uid", patch(admin))
+            .route("/:gid/forbid/:uid", patch(forbid))
             .with_state(app_state)
     }
 }
@@ -144,7 +145,7 @@ async fn add(State(app_state): State<AppState>, Path(req): Path<AddReq>, _: Toke
         group_id: Set(req.gid),
         user_id: Set(req.uid),
         c_time: Default::default(),
-        can_replay: Default::default(),
+        forbid: Default::default(),
     };
     rel.insert(&app_state.db).await?;
     Ok(AppRes::success(()))
@@ -227,6 +228,7 @@ struct User {
     id: i32,
     name: String,
     admin: bool,
+    forbid: bool,
 }
 
 async fn detail(
@@ -251,6 +253,7 @@ async fn detail(
                         id: u.id,
                         name: u.name,
                         admin: u.id == group.admin,
+                        forbid: false,
                     })
                     .collect(),
             }))
@@ -259,13 +262,18 @@ async fn detail(
 }
 
 async fn get_uids(app_state: &AppState, gid: i32) -> Result<Vec<i32>, DbErr> {
-    Ok(UserGroupRel::find()
-        .filter(user_group_rel::Column::GroupId.eq(gid))
-        .all(&app_state.db)
+    Ok(get_rels(&app_state, gid)
         .await?
         .into_iter()
         .map(|ugr| ugr.user_id)
         .collect::<Vec<i32>>())
+}
+
+async fn get_rels(app_state: &AppState, gid: i32) -> Result<Vec<user_group_rel::Model>, DbErr> {
+    UserGroupRel::find()
+        .filter(user_group_rel::Column::GroupId.eq(gid))
+        .all(&app_state.db)
+        .await
 }
 
 async fn admin(
@@ -290,6 +298,38 @@ async fn admin(
             group.admin = Set(uid);
             group.update(&app_state.db).await?;
             Ok(AppRes::success(()))
+        }
+    }
+}
+
+async fn forbid(
+    State(app_state): State<AppState>,
+    Path((gid, uid)): Path<(i32, i32)>,
+    token: Token,
+) -> Res<()> {
+    match Group::find_by_id(gid).one(&app_state.db).await? {
+        None => Err(CustomErr(format!("群（id={}）不存在", gid))),
+        Some(group) => {
+            if group.admin != token.id {
+                return Err(CustomErr("您不是群管理员，不能设置禁言".to_string()));
+            }
+            match UserGroupRel::find()
+                .filter(user_group_rel::Column::GroupId.eq(gid))
+                .filter(user_group_rel::Column::UserId.eq(uid))
+                .one(&app_state.db)
+                .await?
+            {
+                None => Err(CustomErr(format!(
+                    "用户（id={}）不在群内，不能设置禁言",
+                    uid
+                ))),
+                Some(ugr) => {
+                    let mut model = ugr.into_active_model();
+                    model.forbid = Set(true.into());
+                    model.update(&app_state.db).await?;
+                    Ok(AppRes::success(()))
+                }
+            }
         }
     }
 }
