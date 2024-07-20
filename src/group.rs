@@ -253,7 +253,7 @@ async fn detail(
                         id: u.id,
                         name: u.name,
                         admin: u.id == group.admin,
-                        forbid: false,
+                        forbid: false,// TODO
                     })
                     .collect(),
             }))
