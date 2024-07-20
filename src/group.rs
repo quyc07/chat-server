@@ -1,6 +1,7 @@
 use axum::extract::{Path, State};
 use axum::Router;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, post, put};
+use futures::FutureExt;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter, TransactionTrait,
 };
@@ -16,6 +17,7 @@ use entity::prelude::{Group, UserGroupRel};
 use crate::{AppRes, Res, user};
 use crate::app_state::AppState;
 use crate::auth::Token;
+use crate::err::ServerError::CustomErr;
 use crate::validate::ValidatedJson;
 
 #[derive(OpenApi)]
@@ -35,8 +37,7 @@ pub struct GroupApi;
 impl GroupApi {
     pub fn route(app_state: AppState) -> Router {
         Router::new()
-            .route("/all", get(all))
-            .route("/create", post(create))
+            .route("/", post(create).get(all))
             .route("/:gid/:uid", put(add).delete(remove))
             .route("/:gid", delete(delete_group).get(detail))
             .with_state(app_state)
@@ -213,12 +214,48 @@ async fn delete_group(
 }
 
 #[derive(Serialize)]
-struct DetailRes {}
+struct DetailRes {
+    group_id: i32,
+    name: String,
+    users: Vec<User>,
+}
+
+#[derive(Serialize)]
+struct User {
+    id: i32,
+    name: String,
+}
 
 async fn detail(
     State(app_state): State<AppState>,
     Path(gid): Path<i32>,
     token: Token,
 ) -> Res<DetailRes> {
-    Ok(AppRes::success(DetailRes {}))
+    match Group::find_by_id(gid).one(&app_state.db).await? {
+        None => Err(CustomErr(format!("群（id={}）不存在", gid))),
+        Some(group) => {
+            let uids = UserGroupRel::find()
+                .filter(user_group_rel::Column::GroupId.eq(gid))
+                .all(&app_state.db)
+                .await?
+                .into_iter()
+                .map(|ugr| ugr.user_id)
+                .collect::<Vec<i32>>();
+            if !uids.contains(&token.id) {
+                return Err(CustomErr("您不在当前群！".to_string()));
+            }
+            let users = user::get_by_ids(uids, &app_state).await?;
+            Ok(AppRes::success(DetailRes {
+                group_id: gid,
+                name: group.name,
+                users: users
+                    .into_iter()
+                    .map(|u| User {
+                        id: u.id,
+                        name: u.name,
+                    })
+                    .collect(),
+            }))
+        }
+    }
 }

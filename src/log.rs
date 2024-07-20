@@ -1,8 +1,8 @@
 use tracing_appender::rolling;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
 async fn log_file() {
     // 输出到文件
@@ -17,7 +17,7 @@ async fn log_file() {
 }
 
 pub async fn log_init_multi() {
-    let file_appender = rolling::hourly("logs", "info.log");
+    let file_appender = rolling::daily("logs", "info.log");
     // 不生效，不知道为什么
     // let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
     tracing_subscriber::registry()
@@ -34,9 +34,7 @@ pub async fn log_init_multi() {
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stdout)
-                .with_line_number(true)
-                .with_thread_ids(true)
-                .with_thread_names(true)
+                .with_ansi(true)
                 .pretty(),
         )
         .init()

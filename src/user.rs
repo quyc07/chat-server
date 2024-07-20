@@ -6,7 +6,10 @@ use axum::Router;
 use axum::routing::{get, post};
 use chrono::{DateTime, Local, Offset};
 use itertools::Itertools;
-use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait,
+    QueryFilter, Set,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
@@ -318,4 +321,10 @@ pub async fn exist(uid: i32, app_state: &AppState) -> Result<bool, DbErr> {
         .one(&app_state.db)
         .await
         .map(|t| t.is_some())
+}
+
+pub async fn get_by_ids(uids: Vec<i32>, app_state: &AppState) -> Result<Vec<user::Model>, DbErr> {
+    User::find()
+        .filter(user::Column::Id.is_in(uids))
+        .all(&app_state.db).await
 }

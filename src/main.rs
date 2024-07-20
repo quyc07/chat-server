@@ -1,5 +1,5 @@
-use axum::routing::get;
 use axum::Router;
+use axum::routing::get;
 use tokio::net::TcpListener;
 use tracing::info;
 use utoipa::OpenApi;
@@ -20,10 +20,10 @@ async fn main() {
     color_eyre::install().unwrap();
     info!("chat server start begin!");
     let app_state = AppState::new().await.unwrap();
-    // Apply all pending migrations
-    Migrator::up(&app_state.db, None)
-        .await
-        .expect("fail to apply migrations");
+    // 数据初始化
+    // Migrator::up(&app_state.db, None)
+    //     .await
+    //     .expect("fail to apply migrations");
     let app = Router::new()
         .merge(swagger_ui().await)
         .route("/", get(|| async { "Hello, World!" }))
