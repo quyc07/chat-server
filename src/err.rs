@@ -11,6 +11,7 @@ use validator::ValidationErrors;
 
 use crate::AppRes;
 use crate::auth::AuthError;
+use crate::group::GroupErr;
 use crate::user::UserErr;
 
 #[derive(Debug, Error, ToSchema)]
@@ -23,6 +24,8 @@ pub enum ServerError {
     AxumJsonRejection(#[from] JsonRejection),
     #[error(transparent)]
     UserErr(#[from] UserErr),
+    #[error(transparent)]
+    GroupErr(#[from] GroupErr),
     #[error(transparent)]
     DbErr(#[from] DbErr),
     #[error(transparent)]
@@ -64,6 +67,23 @@ impl IntoResponse for ServerError {
                     ),
                     UserErr::UserNotExist(_) => (
                         StatusCode::NOT_FOUND,
+                        Json(AppRes::fail_with_msg(err.to_string())),
+                    ),
+                }
+            }
+            ServerError::GroupErr(err) => {
+                err.print();
+                match err {
+                    GroupErr::GroupNotExist(_) => (
+                        StatusCode::NOT_FOUND,
+                        Json(AppRes::fail_with_msg(err.to_string())),
+                    ),
+                    GroupErr::UserNotInGroup(_, _) => (
+                        StatusCode::NOT_FOUND,
+                        Json(AppRes::fail_with_msg(err.to_string())),
+                    ),
+                    GroupErr::CommonErr(_) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
                         Json(AppRes::fail_with_msg(err.to_string())),
                     ),
                 }

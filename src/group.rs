@@ -10,6 +10,7 @@ use sea_orm::{
 };
 use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use utoipa::{OpenApi, ToSchema};
 use validator::Validate;
 
@@ -20,7 +21,8 @@ use entity::prelude::{Group, UserGroupRel};
 use crate::{AppRes, Res, user};
 use crate::app_state::AppState;
 use crate::auth::Token;
-use crate::err::ServerError::CustomErr;
+use crate::err::{ErrPrint, ServerError};
+use crate::user::UserErr;
 use crate::validate::ValidatedJson;
 
 #[derive(OpenApi)]
@@ -48,6 +50,21 @@ impl GroupApi {
             .with_state(app_state)
     }
 }
+
+#[derive(Debug, Error, ToSchema)]
+pub enum GroupErr {
+    /// Group not exist
+    #[error("群（ID={0}）不存在存在")]
+    GroupNotExist(i32),
+    /// User not exist in group
+    #[error("用户（ID={0}）不在群（ID={1}）内")]
+    UserNotInGroup(i32, i32),
+    /// 通用异常
+    #[error("{0}")]
+    CommonErr(String),
+}
+
+impl ErrPrint for GroupErr {}
 
 #[derive(Serialize, ToSchema)]
 struct AllRes {
@@ -129,13 +146,10 @@ struct RemoveReq {
 )]
 async fn add(State(app_state): State<AppState>, Path(req): Path<AddReq>, _: Token) -> Res<()> {
     if !exist(req.gid, &app_state).await? {
-        return Ok(AppRes::fail_with_msg(format!("群（id={}）不存在", req.gid)));
+        return Err(ServerError::from(GroupErr::GroupNotExist(req.gid)));
     }
     if !user::exist(req.uid, &app_state).await? {
-        return Ok(AppRes::fail_with_msg(format!(
-            "用户（id={}）不存在",
-            req.uid
-        )));
+        return Err(ServerError::from(UserErr::UserNotExist(req.uid)));
     }
     if is_in_group(req.gid, req.uid, &app_state).await? {
         return Ok(AppRes::success_with_msg(
@@ -176,16 +190,15 @@ async fn remove(
     _: Token,
 ) -> Res<()> {
     if !exist(req.gid, &app_state).await? {
-        return Ok(AppRes::fail_with_msg(format!("群（id={}）不存在", req.gid)));
+        return Err(ServerError::from(GroupErr::GroupNotExist(req.gid)));
     }
     if !user::exist(req.uid, &app_state).await? {
-        return Ok(AppRes::fail_with_msg(format!(
-            "用户（id={}）不存在",
-            req.uid
-        )));
+        return Err(ServerError::from(UserErr::UserNotExist(req.uid)));
     }
     if !is_in_group(req.gid, req.uid, &app_state).await? {
-        return Ok(AppRes::fail_with_msg("用户不在群内，无需移出".to_string()));
+        return Err(ServerError::from(GroupErr::UserNotInGroup(
+            req.uid, req.gid,
+        )));
     }
     UserGroupRel::delete_many()
         .filter(user_group_rel::Column::GroupId.eq(req.gid))
@@ -201,7 +214,7 @@ async fn delete_group(
     _: Token,
 ) -> Res<()> {
     if !exist(gid, &app_state).await? {
-        return Ok(AppRes::fail_with_msg(format!("群（ID={}）不存在", gid)));
+        return Err(ServerError::from(GroupErr::GroupNotExist(gid)));
     }
     // 开启事务
     let x = app_state.db.begin().await?;
@@ -239,14 +252,14 @@ async fn detail(
     token: Token,
 ) -> Res<DetailRes> {
     match Group::find_by_id(gid).one(&app_state.db).await? {
-        None => Err(CustomErr(format!("群（id={}）不存在", gid))),
+        None => Err(ServerError::from(GroupErr::GroupNotExist(gid))),
         Some(group) => {
             let rels = get_rels(&app_state, gid).await?;
             // 显示值定数据类型，下面的contians()方法才能通过编译，否则程序无法推断出uids的类型，也就无法使用contains()方法
             let uids: Vec<i32> = rels.iter().map(|x| x.user_id).collect();
             // if !rels.iter().any(|x| x.user_id == token.id) {
             if !uids.contains(&token.id) {
-                return Err(CustomErr("您不在当前群！".to_string()));
+                return Err(ServerError::from(GroupErr::UserNotInGroup(token.id, gid)));
             }
             let uid_2_forbid: HashMap<i32, bool> =
                 rels.iter().map(|x| (x.user_id, x.forbid)).collect();
@@ -289,17 +302,16 @@ async fn admin(
     token: Token,
 ) -> Res<()> {
     match Group::find_by_id(gid).one(&app_state.db).await? {
-        None => Err(CustomErr(format!("群（id={}）不存在", gid))),
+        None => Err(ServerError::from(GroupErr::GroupNotExist(gid))),
         Some(group) => {
             if group.admin != token.id {
-                return Err(CustomErr("您不是群管理员，不能设置群主！".to_string()));
+                return Err(ServerError::from(GroupErr::CommonErr(
+                    "您不是群管理员，不能设置群主！".to_string(),
+                )));
             }
             let uids = get_uids(&app_state, gid).await?;
             if !uids.contains(&uid) {
-                return Err(CustomErr(format!(
-                    "用户（id={}）不在群内，不能设置为群主",
-                    uid
-                )));
+                return Err(ServerError::from(GroupErr::UserNotInGroup(token.id, gid)));
             }
             let mut group = group.into_active_model();
             group.admin = Set(uid);
@@ -315,10 +327,12 @@ async fn forbid(
     token: Token,
 ) -> Res<()> {
     match Group::find_by_id(gid).one(&app_state.db).await? {
-        None => Err(CustomErr(format!("群（id={}）不存在", gid))),
+        None => Err(ServerError::from(GroupErr::GroupNotExist(gid))),
         Some(group) => {
             if group.admin != token.id {
-                return Err(CustomErr("您不是群管理员，不能设置禁言".to_string()));
+                return Err(ServerError::from(GroupErr::CommonErr(
+                    "您不是群管理员，不能设置禁言".to_string(),
+                )));
             }
             match UserGroupRel::find()
                 .filter(user_group_rel::Column::GroupId.eq(gid))
@@ -326,10 +340,7 @@ async fn forbid(
                 .one(&app_state.db)
                 .await?
             {
-                None => Err(CustomErr(format!(
-                    "用户（id={}）不在群内，不能设置禁言",
-                    uid
-                ))),
+                None => Err(ServerError::from(GroupErr::UserNotInGroup(token.id, gid))),
                 Some(ugr) => {
                     if ugr.forbid == true {
                         return Ok(AppRes::success_with_msg(
@@ -352,10 +363,12 @@ async fn un_forbid(
     token: Token,
 ) -> Res<()> {
     match Group::find_by_id(gid).one(&app_state.db).await? {
-        None => Err(CustomErr(format!("群（id={}）不存在", gid))),
+        None => Err(ServerError::from(GroupErr::GroupNotExist(gid))),
         Some(group) => {
             if group.admin != token.id {
-                return Err(CustomErr("您不是群管理员，不能设置禁言".to_string()));
+                return Err(ServerError::from(GroupErr::CommonErr(
+                    "您不是群管理员，不能设置禁言".to_string(),
+                )));
             }
             match UserGroupRel::find()
                 .filter(user_group_rel::Column::GroupId.eq(gid))
@@ -363,10 +376,7 @@ async fn un_forbid(
                 .one(&app_state.db)
                 .await?
             {
-                None => Err(CustomErr(format!(
-                    "用户（id={}）不在群内，不能设置禁言",
-                    uid
-                ))),
+                None => Err(ServerError::from(GroupErr::UserNotInGroup(token.id, gid))),
                 Some(ugr) => {
                     if ugr.forbid == false {
                         return Ok(AppRes::success_with_msg(
