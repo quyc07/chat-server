@@ -6,10 +6,7 @@ use axum::Router;
 use axum::routing::{get, post};
 use chrono::{DateTime, Local, Offset};
 use itertools::Itertools;
-use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait,
-    QueryFilter, Set,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
@@ -19,9 +16,9 @@ use validator::Validate;
 use entity::prelude::User;
 use entity::user;
 
-use crate::{AppRes, auth, Res};
+use crate::{AppRes, Res};
 use crate::app_state::AppState;
-use crate::auth::{AuthError, Token};
+use crate::auth::Token;
 use crate::err::{ErrPrint, ServerError};
 use crate::event::BroadcastEvent;
 use crate::format::datetime_format;
@@ -47,7 +44,6 @@ impl UserApi {
         Router::new()
             .route("/register", post(register))
             .route("/all", get(all))
-            .route("/login", post(login))
             .route("/:uid/send", post(send))
             .route("/:uid/history", get(get_history_msg))
             .route("/history", get(history))
@@ -158,39 +154,6 @@ impl From<user::Model> for UserRes {
             status: value.status.into(),
         }
     }
-}
-
-async fn login(
-    State(app_state): State<AppState>,
-    ValidatedJson(req): ValidatedJson<UserLoginReq>,
-) -> Res<UserLoginRes> {
-    let user = find_by_name(&app_state, &req.name).await.unwrap().unwrap();
-    if user.password != req.password {
-        return Err(ServerError::from(AuthError::WrongCredentials));
-    }
-    // Create the authorization token
-    let token = Token::from(user);
-    let access_token = auth::gen_token(token).await?;
-
-    // Send the authorized token
-    Ok(AppRes::success(UserLoginRes {
-        access_token,
-        access_token_expires: auth::expire().await,
-    }))
-}
-
-#[derive(Debug, Deserialize, Validate)]
-struct UserLoginReq {
-    #[validate(length(min = 1))]
-    name: String,
-    #[validate(length(min = 1))]
-    password: String,
-}
-
-#[derive(Debug, Serialize)]
-struct UserLoginRes {
-    access_token: String,
-    access_token_expires: DateTime<Local>,
 }
 
 // 按照参数定义的先后顺序进行解析，ValidatedJson会消耗掉Request，因此要放在最后面解析
@@ -308,7 +271,7 @@ impl ChatMessagePayload {
     }
 }
 
-async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::Model>, DbErr> {
+pub async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::Model>, DbErr> {
     User::find()
         .filter(user::Column::Name.eq(name))
         .one(&app_state.db)
@@ -326,5 +289,6 @@ pub async fn exist(uid: i32, app_state: &AppState) -> Result<bool, DbErr> {
 pub async fn get_by_ids(uids: Vec<i32>, app_state: &AppState) -> Result<Vec<user::Model>, DbErr> {
     User::find()
         .filter(user::Column::Id.is_in(uids))
-        .all(&app_state.db).await
+        .all(&app_state.db)
+        .await
 }

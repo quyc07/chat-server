@@ -1,35 +1,40 @@
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::ops::Add;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::extract::{FromRequest, FromRequestParts};
-use axum::http::request::Parts;
-use axum::routing::post;
-use axum::Router;
 use axum::{async_trait, RequestPartsExt};
-use axum_extra::headers::authorization::Bearer;
+use axum::extract::{FromRequest, FromRequestParts, State};
+use axum::http::request::Parts;
+use axum::Router;
+use axum::routing::{delete, post};
 use axum_extra::headers::Authorization;
+use axum_extra::headers::authorization::Bearer;
 use axum_extra::TypedHeader;
 use chrono::{DateTime, Local};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
+use jsonwebtoken::{decode, DecodingKey, encode, EncodingKey, Header, TokenData, Validation};
 use once_cell::sync::Lazy;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 use validator::Validate;
 
-use entity::user;
-
+use crate::{AppRes, Res, user};
 use crate::app_state::AppState;
 use crate::err::{ErrPrint, ServerError};
-use crate::{AppRes, Res};
+use crate::validate::ValidatedJson;
 
 pub static KEYS: Lazy<Keys> = Lazy::new(|| {
     let secret = std::env::var("JWT_SECRET").unwrap_or("abc".to_string());
     Keys::new(secret.as_bytes())
 });
 
-#[derive(Debug, Serialize, Deserialize)]
+/// 当前已登陆用户集合
+static LOGIN_USER: Lazy<Arc<Mutex<HashMap<i32, Token>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Token {
     pub id: i32,
     pub name: String,
@@ -39,8 +44,8 @@ pub struct Token {
     exp: i64,
 }
 
-impl From<user::Model> for Token {
-    fn from(value: user::Model) -> Self {
+impl From<entity::user::Model> for Token {
+    fn from(value: entity::user::Model) -> Self {
         Token {
             id: value.id,
             name: value.name,
@@ -62,16 +67,23 @@ where
         match parts.extract::<TypedHeader<Authorization<Bearer>>>().await {
             Ok(TypedHeader(Authorization(bearer))) => {
                 let token_data = parse_token(bearer.token()).await?;
-                Ok(token_data.claims)
+                // 判断是否是已登陆用户
+                match LOGIN_USER.lock().unwrap().get(&token_data.claims.id) {
+                    None => Err(ServerError::from(AuthError::InvalidToken)),
+                    Some(jsonwebtoken) => {
+                        if jsonwebtoken.exp < Local::now().timestamp() {
+                            Err(ServerError::from(AuthError::InvalidToken))
+                        } else {
+                            Ok(token_data.claims)
+                        }
+                    }
+                }
             }
             Err(_) => {
                 let query = parts.uri.query().unwrap_or_default();
                 let value: HashMap<String, String> =
                     serde_html_form::from_str(query).map_err(|_| AuthError::InvalidToken)?;
-                let token = value
-                    .get("token")
-                    .ok_or(AuthError::InvalidToken)?
-                    .as_str();
+                let token = value.get("token").ok_or(AuthError::InvalidToken)?.as_str();
                 let token_data = parse_token(token).await?;
                 Ok(token_data.claims)
             }
@@ -105,8 +117,53 @@ impl TokenApi {
     pub fn route(app_state: AppState) -> Router {
         Router::new()
             .route("/renew", post(renew))
+            .route("/login", post(login))
+            .route("/logout", delete(logout))
             .with_state(app_state)
     }
+}
+
+#[derive(Debug, Deserialize, Validate)]
+struct UserLoginReq {
+    #[validate(length(min = 1))]
+    name: String,
+    #[validate(length(min = 1))]
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UserLoginRes {
+    access_token: String,
+    access_token_expires: DateTime<Local>,
+}
+
+async fn login(
+    State(app_state): State<AppState>,
+    ValidatedJson(req): ValidatedJson<UserLoginReq>,
+) -> Res<UserLoginRes> {
+    let user = user::find_by_name(&app_state, &req.name)
+        .await
+        .unwrap()
+        .unwrap();
+    if user.password != req.password {
+        return Err(ServerError::from(AuthError::WrongCredentials));
+    }
+    // Create the authorization token
+    let token = Token::from(user);
+    let access_token = gen_token(&token).await?;
+    // 保存已登陆用户
+    LOGIN_USER.lock().unwrap().insert(token.id, token);
+    // Send the authorized token
+    Ok(AppRes::success(UserLoginRes {
+        access_token,
+        access_token_expires: expire().await,
+    }))
+}
+
+async fn logout(token: Token) -> Res<()> {
+    // 删除已登陆用户
+    LOGIN_USER.lock().unwrap().remove(&token.id);
+    Ok(AppRes::success(()))
 }
 
 async fn renew(token: Token) -> Res<String> {
@@ -114,7 +171,10 @@ async fn renew(token: Token) -> Res<String> {
         exp: expire_timestamp(),
         ..token
     };
-    Ok(AppRes::success(gen_token(token).await?))
+    let access_token = gen_token(&token).await?;
+    // 刷新已登陆用户token
+    LOGIN_USER.lock().unwrap().insert(token.id, token);
+    Ok(AppRes::success(access_token))
 }
 
 const SECOND_TO_EXPIRED: u64 = 60 * 5;
@@ -129,8 +189,8 @@ pub async fn expire() -> DateTime<Local> {
     Local::now().add(Duration::from_secs(SECOND_TO_EXPIRED))
 }
 
-pub async fn gen_token(token: Token) -> Result<String, AuthError> {
-    encode(&Header::default(), &token, &KEYS.encoding).map_err(|_| AuthError::TokenCreation)
+pub async fn gen_token(token: &Token) -> Result<String, AuthError> {
+    encode(&Header::default(), token, &KEYS.encoding).map_err(|_| AuthError::TokenCreation)
 }
 
 pub async fn parse_token(token: &str) -> Result<TokenData<Token>, AuthError> {
@@ -167,7 +227,7 @@ mod test {
     use serde::{Deserialize, Serialize};
     use sha2::Sha256;
 
-    use crate::auth::{AuthError, Token, KEYS};
+    use crate::auth::{AuthError, KEYS, Token};
 
     #[test]
     fn test_token() {
@@ -176,7 +236,7 @@ mod test {
             name: "name".to_string(),
             email: "email".to_string(),
             phone: None,
-            exp: Local::now().add(Duration::from_secs(1)).timestamp(),
+            exp: Local::now().add(Duration::from_secs(3)).timestamp(),
         };
 
         let encode_token = encode(&Header::default(), &token, &KEYS.encoding)
