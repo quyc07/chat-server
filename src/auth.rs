@@ -30,7 +30,7 @@ pub static KEYS: Lazy<Keys> = Lazy::new(|| {
     Keys::new(secret.as_bytes())
 });
 
-/// 当前已登陆用户集合
+/// 当前已登陆用户集合 TODO 替换成moka 缓存
 static LOGIN_USER: Lazy<Arc<Mutex<HashMap<i32, Token>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
