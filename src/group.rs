@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::extract::{Path, State};
 use axum::Router;
 use axum::routing::{delete, patch, post, put};
@@ -239,10 +241,15 @@ async fn detail(
     match Group::find_by_id(gid).one(&app_state.db).await? {
         None => Err(CustomErr(format!("群（id={}）不存在", gid))),
         Some(group) => {
-            let uids = get_uids(&app_state, gid).await?;
+            let rels = get_rels(&app_state, gid).await?;
+            // 显示值定数据类型，下面的contians()方法才能通过编译，否则程序无法推断出uids的类型，也就无法使用contains()方法
+            let uids: Vec<i32> = rels.iter().map(|x| x.user_id).collect();
+            // if !rels.iter().any(|x| x.user_id == token.id) {
             if !uids.contains(&token.id) {
                 return Err(CustomErr("您不在当前群！".to_string()));
             }
+            let uid_2_forbid: HashMap<i32, bool> =
+                rels.iter().map(|x| (x.user_id, x.forbid)).collect();
             let users = user::get_by_ids(uids, &app_state).await?;
             Ok(AppRes::success(DetailRes {
                 group_id: gid,
@@ -253,7 +260,7 @@ async fn detail(
                         id: u.id,
                         name: u.name,
                         admin: u.id == group.admin,
-                        forbid: false,// TODO
+                        forbid: *uid_2_forbid.get(&u.id).unwrap_or(&false),
                     })
                     .collect(),
             }))
