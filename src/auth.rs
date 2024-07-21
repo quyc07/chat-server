@@ -88,7 +88,11 @@ where
                     serde_html_form::from_str(query).map_err(|_| AuthError::InvalidToken)?;
                 let token = value.get("token").ok_or(AuthError::InvalidToken)?.as_str();
                 let token_data = parse_token(token).await?;
-                Ok(token_data.claims)
+                // 判断是否是已登陆用户，LOGIN_USER的内存过期时间与token的expire时间一致，因此只需判断是否存在即可
+                match LOGIN_USER.get(&token_data.claims.id).await {
+                    None => Err(ServerError::from(AuthError::InvalidToken)),
+                    Some(_) => Ok(token_data.claims),
+                }
             }
         }
     }
