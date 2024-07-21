@@ -44,7 +44,7 @@ impl GroupApi {
             .route("/:gid/:uid", put(add).delete(remove))
             .route("/:gid", delete(delete_group).get(detail))
             .route("/:gid/admin/:uid", patch(admin))
-            .route("/:gid/forbid/:uid", patch(forbid))
+            .route("/:gid/forbid/:uid", put(forbid).delete(un_forbid))
             .with_state(app_state)
     }
 }
@@ -331,8 +331,50 @@ async fn forbid(
                     uid
                 ))),
                 Some(ugr) => {
+                    if ugr.forbid == true {
+                        return Ok(AppRes::success_with_msg(
+                            "用户已经禁言，无需再次禁言".to_string(),
+                        ));
+                    }
                     let mut model = ugr.into_active_model();
                     model.forbid = Set(true.into());
+                    model.update(&app_state.db).await?;
+                    Ok(AppRes::success(()))
+                }
+            }
+        }
+    }
+}
+
+async fn un_forbid(
+    State(app_state): State<AppState>,
+    Path((gid, uid)): Path<(i32, i32)>,
+    token: Token,
+) -> Res<()> {
+    match Group::find_by_id(gid).one(&app_state.db).await? {
+        None => Err(CustomErr(format!("群（id={}）不存在", gid))),
+        Some(group) => {
+            if group.admin != token.id {
+                return Err(CustomErr("您不是群管理员，不能设置禁言".to_string()));
+            }
+            match UserGroupRel::find()
+                .filter(user_group_rel::Column::GroupId.eq(gid))
+                .filter(user_group_rel::Column::UserId.eq(uid))
+                .one(&app_state.db)
+                .await?
+            {
+                None => Err(CustomErr(format!(
+                    "用户（id={}）不在群内，不能设置禁言",
+                    uid
+                ))),
+                Some(ugr) => {
+                    if ugr.forbid == false {
+                        return Ok(AppRes::success_with_msg(
+                            "用户未禁言，无需解除禁言".to_string(),
+                        ));
+                    }
+                    let mut model = ugr.into_active_model();
+                    model.forbid = Set(false.into());
                     model.update(&app_state.db).await?;
                     Ok(AppRes::success(()))
                 }
