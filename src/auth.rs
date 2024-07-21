@@ -311,3 +311,7 @@ mod test {
         println!("{:?}", time.timezone());
     }
 }
+
+pub(crate) async fn delete_login_status(user_id: i32) {
+    LOGIN_USER.remove(&user_id).await;
+}

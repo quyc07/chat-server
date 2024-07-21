@@ -3,10 +3,13 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use chrono::{DateTime, Local, Offset};
 use itertools::Itertools;
-use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter,
+};
+use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
@@ -16,7 +19,7 @@ use validator::Validate;
 use entity::prelude::User;
 use entity::user;
 
-use crate::{AppRes, Res};
+use crate::{AppRes, auth, Res};
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::err::{ErrPrint, ServerError};
@@ -47,6 +50,7 @@ impl UserApi {
             .route("/:uid/send", post(send))
             .route("/:uid/history", get(get_history_msg))
             .route("/history", get(history))
+            .route("/password", patch(password))
             .with_state(app_state)
     }
 }
@@ -73,6 +77,9 @@ pub enum UserErr {
     /// UserName already exists
     #[error("用户名 {0} 已存在")]
     UserNameExist(String),
+    /// User not exist
+    #[error("用户{0}不存在")]
+    UserNotExist(i32),
 }
 
 impl ErrPrint for UserErr {}
@@ -291,4 +298,27 @@ pub async fn get_by_ids(uids: Vec<i32>, app_state: &AppState) -> Result<Vec<user
         .filter(user::Column::Id.is_in(uids))
         .all(&app_state.db)
         .await
+}
+#[derive(Deserialize, ToSchema, Validate)]
+struct PasswordReq {
+    #[validate(length(min = 1, message = "password is blank"))]
+    password: String,
+}
+async fn password(
+    State(app_state): State<AppState>,
+    token: Token,
+    ValidatedJson(req): ValidatedJson<PasswordReq>,
+) -> Res<()> {
+    match User::find_by_id(token.id).one(&app_state.db).await? {
+        None => Err(ServerError::from(UserErr::UserNotExist(token.id))),
+        Some(user) => {
+            // 修改密码
+            let mut user = user.into_active_model();
+            user.password = Set(req.password);
+            user.update(&app_state.db).await?;
+            // 删除登陆状态
+            auth::delete_login_status(token.id).await;
+            Ok(AppRes::success(()))
+        }
+    }
 }

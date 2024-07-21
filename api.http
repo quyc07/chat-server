@@ -8,7 +8,7 @@ Content-Type: application/json
   "password": "123",
   "phone": "18911223344"
 }
-k
+
 ### 用户登陆
 POST http://localhost:3000/token/login
 Content-Type: application/json

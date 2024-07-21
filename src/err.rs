@@ -1,7 +1,7 @@
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use axum::Json;
+use axum::response::{IntoResponse, Response};
 use color_eyre::eyre::eyre;
 use sea_orm::DbErr;
 use thiserror::Error;
@@ -9,9 +9,9 @@ use tracing::{error, warn};
 use utoipa::ToSchema;
 use validator::ValidationErrors;
 
+use crate::AppRes;
 use crate::auth::AuthError;
 use crate::user::UserErr;
-use crate::AppRes;
 
 #[derive(Debug, Error, ToSchema)]
 pub enum ServerError {
@@ -60,6 +60,10 @@ impl IntoResponse for ServerError {
                 match err {
                     UserErr::UserNameExist(_) => (
                         StatusCode::CONFLICT,
+                        Json(AppRes::fail_with_msg(err.to_string())),
+                    ),
+                    UserErr::UserNotExist(_) => (
+                        StatusCode::NOT_FOUND,
                         Json(AppRes::fail_with_msg(err.to_string())),
                     ),
                 }
