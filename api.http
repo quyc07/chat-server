@@ -8,6 +8,23 @@ Content-Type: application/json
   "password": "123",
   "phone": "18911223344"
 }
+k
+### 用户登陆
+POST http://localhost:3000/token/login
+Content-Type: application/json
+
+{
+  "name": "andy",
+  "password": "123"
+}
+
+> {%
+    client.global.set("auth_token", response.body.data["access_token"]);
+%}
+
+### GET 查看群列表
+GET http://localhost:3000/group
+Authorization: Bearer {{auth_token}}
 
 ### GET 添加群成员
 GET http://localhost:3000/group/add?gid=1&uid=7

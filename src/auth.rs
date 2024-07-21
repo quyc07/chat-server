@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::Add;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::{async_trait, RequestPartsExt};
@@ -14,10 +13,12 @@ use axum_extra::headers::authorization::Bearer;
 use axum_extra::TypedHeader;
 use chrono::{DateTime, Local};
 use jsonwebtoken::{decode, DecodingKey, encode, EncodingKey, Header, TokenData, Validation};
+use moka::future::Cache;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
+use tracing::error;
 use validator::Validate;
 
 use crate::{AppRes, Res, user};
@@ -25,14 +26,22 @@ use crate::app_state::AppState;
 use crate::err::{ErrPrint, ServerError};
 use crate::validate::ValidatedJson;
 
-pub static KEYS: Lazy<Keys> = Lazy::new(|| {
+const KEYS: Lazy<Keys> = Lazy::new(|| {
     let secret = std::env::var("JWT_SECRET").unwrap_or("abc".to_string());
     Keys::new(secret.as_bytes())
 });
 
-/// 当前已登陆用户集合 TODO 替换成moka 缓存
-static LOGIN_USER: Lazy<Arc<Mutex<HashMap<i32, Token>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+/// 当前已登陆用户集合，替换成moka 缓存
+// static LOGIN_USER: Lazy<Arc<Mutex<HashMap<i32, Token>>>> =
+//     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+// const 修饰的变量是只读的，运行时无法修改，因此该缓存只能使用static修饰
+static LOGIN_USER: Lazy<Cache<i32, Token>> = Lazy::new(|| {
+    Cache::builder()
+        // 空闲时间与jwt过期时间保持一致
+        .time_to_idle(Duration::from_secs(SECOND_TO_EXPIRED))
+        .build()
+});
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Token {
@@ -67,16 +76,10 @@ where
         match parts.extract::<TypedHeader<Authorization<Bearer>>>().await {
             Ok(TypedHeader(Authorization(bearer))) => {
                 let token_data = parse_token(bearer.token()).await?;
-                // 判断是否是已登陆用户
-                match LOGIN_USER.lock().unwrap().get(&token_data.claims.id) {
+                // 判断是否是已登陆用户，LOGIN_USER的内存过期时间与token的expire时间一致，因此只需判断是否存在即可
+                match LOGIN_USER.get(&token_data.claims.id).await {
                     None => Err(ServerError::from(AuthError::InvalidToken)),
-                    Some(jsonwebtoken) => {
-                        if jsonwebtoken.exp < Local::now().timestamp() {
-                            Err(ServerError::from(AuthError::InvalidToken))
-                        } else {
-                            Ok(token_data.claims)
-                        }
-                    }
+                    Some(_) => Ok(token_data.claims),
                 }
             }
             Err(_) => {
@@ -152,7 +155,7 @@ async fn login(
     let token = Token::from(user);
     let access_token = gen_token(&token).await?;
     // 保存已登陆用户
-    LOGIN_USER.lock().unwrap().insert(token.id, token);
+    LOGIN_USER.insert(token.id, token).await;
     // Send the authorized token
     Ok(AppRes::success(UserLoginRes {
         access_token,
@@ -162,7 +165,7 @@ async fn login(
 
 async fn logout(token: Token) -> Res<()> {
     // 删除已登陆用户
-    LOGIN_USER.lock().unwrap().remove(&token.id);
+    LOGIN_USER.remove(&token.id).await;
     Ok(AppRes::success(()))
 }
 
@@ -173,7 +176,7 @@ async fn renew(token: Token) -> Res<String> {
     };
     let access_token = gen_token(&token).await?;
     // 刷新已登陆用户token
-    LOGIN_USER.lock().unwrap().insert(token.id, token);
+    LOGIN_USER.insert(token.id, token).await;
     Ok(AppRes::success(access_token))
 }
 
