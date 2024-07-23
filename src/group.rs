@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::extract::{Path, State};
 use axum::Router;
-use axum::routing::{delete, patch, post, put};
-use futures::FutureExt;
+use axum::routing::{delete, get, patch, post, put};
+use futures::{FutureExt, StreamExt};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter,
     TransactionTrait,
@@ -11,6 +11,7 @@ use sea_orm::{
 use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio_stream::StreamExt as OtherStreamExt;
 use utoipa::{OpenApi, ToSchema};
 use validator::Validate;
 
@@ -31,7 +32,7 @@ use crate::validate::ValidatedJson;
         all,create,add
     ),
     components(
-        schemas(AllRes,CreateReq)
+        schemas(GroupRes,CreateReq)
     ),
     tags(
         (name = "group", description = "Group API")
@@ -42,7 +43,8 @@ pub struct GroupApi;
 impl GroupApi {
     pub fn route(app_state: AppState) -> Router {
         Router::new()
-            .route("/", post(create).get(all))
+            .route("/", post(create).get(mine))
+            .route("/all", get(all))
             .route("/:gid/:uid", put(add).delete(remove))
             .route("/:gid", delete(delete_group).get(detail))
             .route("/:gid/admin/:uid", patch(admin))
@@ -67,12 +69,12 @@ pub enum GroupErr {
 impl ErrPrint for GroupErr {}
 
 #[derive(Serialize, ToSchema)]
-struct AllRes {
+struct GroupRes {
     pub id: i32,
     pub name: String,
 }
 
-impl From<Model> for AllRes {
+impl From<Model> for GroupRes {
     fn from(value: Model) -> Self {
         Self {
             id: value.id,
@@ -88,10 +90,32 @@ impl From<Model> for AllRes {
     (status = 200, description = "Get all groups", body = [AllRes]),
     )
 )]
-async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<AllRes>> {
+async fn all(State(app_state): State<AppState>) -> Res<Vec<GroupRes>> {
     let groups = Group::find().all(&app_state.db).await?;
     Ok(AppRes::success(
-        groups.into_iter().map(AllRes::from).collect(),
+        groups.into_iter().map(GroupRes::from).collect(),
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/group/mine",
+    responses(
+    (status = 200, description = "Get all groups", body = [AllRes]),
+    )
+)]
+async fn mine(State(app_state): State<AppState>, token: Token) -> Res<Vec<GroupRes>> {
+    let ugrs = UserGroupRel::find()
+        .filter(user_group_rel::Column::UserId.eq(token.id))
+        .all(&app_state.db)
+        .await?;
+    let gids = ugrs.iter().map(|x| x.group_id).collect::<HashSet<i32>>();
+    let groups = Group::find()
+        .filter(group::Column::Id.is_in(gids))
+        .all(&app_state.db)
+        .await?;
+    Ok(AppRes::success(
+        groups.into_iter().map(GroupRes::from).collect(),
     ))
 }
 
