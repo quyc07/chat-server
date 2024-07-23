@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use axum::extract::{Path, State};
 use axum::Router;
 use axum::routing::{delete, get, patch, post, put};
-use futures::{FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter,
     TransactionTrait,
@@ -114,6 +114,27 @@ async fn mine(State(app_state): State<AppState>, token: Token) -> Res<Vec<GroupR
         .filter(group::Column::Id.is_in(gids))
         .all(&app_state.db)
         .await?;
+    Ok(AppRes::success(
+        groups.into_iter().map(GroupRes::from).collect(),
+    ))
+}
+
+/// 采用stream操作可减少内存分配
+async fn mine_stream(State(app_state): State<AppState>, token: Token) -> Res<Vec<GroupRes>> {
+    let mut ugr_stream = UserGroupRel::find()
+        .filter(user_group_rel::Column::UserId.eq(token.id))
+        .stream(&app_state.db)
+        .await?;
+    let mut groups = Vec::new();
+    while let Some(ugr) = TryStreamExt::try_next(&mut ugr_stream).await? {
+        let option = Group::find()
+            .filter(group::Column::Id.eq(ugr.group_id))
+            .one(&app_state.db)
+            .await?;
+        if let Some(g) = option {
+            groups.push(g);
+        }
+    }
     Ok(AppRes::success(
         groups.into_iter().map(GroupRes::from).collect(),
     ))
