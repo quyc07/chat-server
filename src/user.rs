@@ -166,19 +166,19 @@ impl From<user::Model> for UserRes {
 // 按照参数定义的先后顺序进行解析，ValidatedJson会消耗掉Request，因此要放在最后面解析
 async fn send(
     State(app_state): State<AppState>,
-    uid: Path<i32>,
+    Path(uid): Path<i32>,
     token: Token,
     ValidatedJson(msg): ValidatedJson<SendMsgReq>,
 ) -> Res<i64> {
-    let payload = ChatMessagePayload::new(token.id, uid.0, msg.msg);
+    let payload = ChatMessagePayload::new(token.id, uid, msg.msg);
     let mid = app_state.msg_db.lock().unwrap().messages().send_to_dm(
         token.id as i64,
-        uid.0 as i64,
+        uid as i64,
         &serde_json::to_vec(&payload)
             .map_err(|_e| ServerError::CustomErr("fail to transfer message to vec".to_string()))?,
     )?;
     let _ = app_state.event_sender.send(Arc::new(BroadcastEvent::Chat {
-        targets: BTreeSet::from([token.id, uid.0]),
+        targets: BTreeSet::from([token.id, uid]),
         message: ChatMessage::new(mid, payload),
     }));
     return Ok(AppRes::success(mid));
