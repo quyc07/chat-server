@@ -175,7 +175,7 @@ async fn send(
         token.id as i64,
         uid as i64,
         &serde_json::to_vec(&payload)
-            .map_err(|_e| ServerError::CustomErr("fail to transfer message to vec".to_string()))?,
+            .map_err(|_| ServerError::CustomErr("fail to transfer message to vec".to_string()))?,
     )?;
     let _ = app_state.event_sender.send(Arc::new(BroadcastEvent::Chat {
         targets: BTreeSet::from([token.id, uid]),

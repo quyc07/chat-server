@@ -149,8 +149,7 @@ async fn login(
     ValidatedJson(req): ValidatedJson<UserLoginReq>,
 ) -> Res<UserLoginRes> {
     let user = user::find_by_name(&app_state, &req.name)
-        .await
-        .unwrap()
+        .await?
         .unwrap();
     if user.password != req.password {
         return Err(ServerError::from(AuthError::WrongCredentials));

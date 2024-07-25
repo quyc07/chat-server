@@ -2,17 +2,19 @@ use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::State;
-use axum::response::sse::Event;
 use axum::response::Sse;
-use axum::routing::get;
+use axum::response::sse::Event;
 use axum::Router;
+use axum::routing::get;
 use axum_extra::{headers, TypedHeader};
 use chrono::{DateTime, Local};
 use futures::Stream;
 use serde::Serialize;
+use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
@@ -46,7 +48,11 @@ async fn event_handler(
     // You can also create streams from tokio channels using the wrappers in
     // https://docs.rs/tokio-stream
     let (tx_msg, rx_msg) = mpsc::unbounded_channel();
-    tokio::spawn(event_loop(app_state, tx_msg, token.id)); // 临时使用1
+    tokio::spawn(event_loop(
+        tx_msg,
+        token.id,
+        app_state.event_sender.subscribe(),
+    )); // 临时使用1
     let receiver_stream = tokio_stream::wrappers::UnboundedReceiverStream::from(rx_msg);
     Sse::new(receiver_stream).keep_alive(
         axum::response::sse::KeepAlive::new()
@@ -56,15 +62,14 @@ async fn event_handler(
 }
 
 async fn event_loop(
-    app_state: AppState,
     tx_msg: UnboundedSender<Result<Event, Infallible>>,
     current_uid: i32,
+    mut receiver: Receiver<Arc<BroadcastEvent>>,
 ) {
     let mut heartbeat = tokio::time::interval_at(
         Instant::now() + Duration::from_secs(5),
         Duration::from_secs(15),
     );
-    let mut receiver = app_state.event_sender.subscribe();
     loop {
         tokio::select! {
             res = receiver.recv() =>{
