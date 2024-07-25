@@ -326,7 +326,7 @@ async fn detail(
     }
 }
 
-async fn get_uids(app_state: &AppState, gid: i32) -> Result<Vec<i32>, DbErr> {
+pub(crate) async fn get_uids(app_state: &AppState, gid: i32) -> Result<Vec<i32>, DbErr> {
     Ok(get_rels(&app_state, gid)
         .await?
         .into_iter()
@@ -436,4 +436,12 @@ async fn un_forbid(
             }
         }
     }
+}
+
+pub(crate) async fn get_user_by_gid(
+    app_state: AppState,
+    gid: i32,
+) -> Result<Vec<entity::user::Model>, DbErr> {
+    let uids = get_uids(&app_state, gid).await?;
+    user::get_by_ids(uids, &app_state).await
 }
