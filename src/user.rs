@@ -25,7 +25,8 @@ use crate::err::{ErrPrint, ServerError};
 use crate::format::datetime_format;
 use crate::format::opt_datetime_format;
 use crate::message::{
-    ChatMessage, ChatMessagePayload, MessageTarget, MessageTargetUser, SendMsgReq,
+    ChatMessage, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget,
+    MessageTargetUser, SendMsgReq,
 };
 use crate::validate::ValidatedJson;
 
@@ -178,25 +179,20 @@ async fn send(
 
 async fn get_history_msg(
     State(app_state): State<AppState>,
-    uid: Path<i32>,
+    Path(uid): Path<i32>,
     token: Token,
 ) -> Res<Vec<ChatMessage>> {
-    let msgs = app_state
-        .msg_db
-        .lock()
-        .unwrap()
-        .messages()
-        .fetch_dm_messages_before(token.id as i64, uid.0 as i64, None, 1000)?;
-    let msg = msgs
-        .into_iter()
-        .filter_map(|(mid, msg)| {
-            serde_json::from_slice::<ChatMessagePayload>(&msg)
-                .ok()
-                .map(|c| ChatMessage::new(mid, c))
-        })
-        .collect();
-
-    Ok(AppRes::success(msg))
+    Ok(AppRes::success(message::get_history_msg(
+        app_state,
+        HistoryMsgReq::User(HistoryMsgUser {
+            from_id: token.id,
+            to_id: uid,
+            history: HistoryReq {
+                before: None,
+                limit: 1000,
+            },
+        }),
+    )))
 }
 
 #[derive(Debug, Deserialize)]

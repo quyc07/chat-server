@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Local};
+use futures::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
@@ -9,12 +10,6 @@ use crate::app_state::AppState;
 use crate::err::ServerError;
 use crate::event::BroadcastEvent;
 use crate::group;
-
-// #[derive(Error, ToSchema)]
-// pub enum MsgErr {
-//     #[error("用户名 {0} 已存在")]
-//     FailToSendDM(ChatMessagePayload),
-// }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ChatMessagePayload {
@@ -144,4 +139,76 @@ pub(crate) async fn send_msg(
         }
     };
     Ok(mid)
+}
+
+pub enum HistoryMsgReq {
+    User(HistoryMsgUser),
+    Group(HistoryMsgGroup),
+}
+
+pub struct HistoryReq {
+    pub(crate) before: Option<i64>,
+    pub(crate) limit: usize,
+}
+
+pub struct HistoryMsgUser {
+    pub(crate) from_id: i32,
+    pub(crate) to_id: i32,
+    pub(crate) history: HistoryReq,
+}
+
+pub struct HistoryMsgGroup {
+    gid: i32,
+    history: HistoryReq,
+}
+
+pub(crate) fn get_history_msg(
+    app_state: AppState,
+    history_msg_req: HistoryMsgReq,
+) -> Vec<ChatMessage> {
+    match history_msg_req {
+        HistoryMsgReq::User(HistoryMsgUser {
+            from_id,
+            to_id,
+            history: HistoryReq { before, limit },
+        }) => {
+            let result = app_state
+                .msg_db
+                .lock()
+                .unwrap()
+                .messages()
+                .fetch_dm_messages_before(from_id as i64, to_id as i64, before, limit)
+                .ok();
+            match result {
+                Some(msgs) => build_chat_message(msgs),
+                None => vec![],
+            }
+        }
+        HistoryMsgReq::Group(HistoryMsgGroup {
+            gid,
+            history: HistoryReq { before, limit },
+        }) => {
+            let result = app_state
+                .msg_db
+                .lock()
+                .unwrap()
+                .messages()
+                .fetch_group_messages_before(gid as i64, before, limit)
+                .ok();
+            match result {
+                Some(msgs) => build_chat_message(msgs),
+                None => vec![],
+            }
+        }
+    }
+}
+
+fn build_chat_message(msgs: Vec<(i64, Vec<u8>)>) -> Vec<ChatMessage> {
+    msgs.into_iter()
+        .filter_map(|(mid, msg)| {
+            serde_json::from_slice::<ChatMessagePayload>(&msg)
+                .ok()
+                .map(|c| ChatMessage::new(mid, c))
+        })
+        .collect()
 }
