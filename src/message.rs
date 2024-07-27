@@ -47,18 +47,29 @@ impl SendMsgReq {
 
 impl ChatMessagePayload {}
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum MessageTarget {
     User(MessageTargetUser),
     Group(MessageTargetGroup),
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
+impl From<MessageTarget> for String {
+    fn from(value: MessageTarget) -> Self {
+        match value {
+            MessageTarget::User(MessageTargetUser { uid }) => format!("MessageTargetUser:{uid}"),
+            MessageTarget::Group(MessageTargetGroup { gid }) => {
+                format!("MessageTargetGroup:{gid}")
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub struct MessageTargetUser {
     pub uid: i32,
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub struct MessageTargetGroup {
     pub gid: i32,
 }

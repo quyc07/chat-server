@@ -19,10 +19,11 @@ use entity::{group, user_group_rel};
 use entity::group::Model;
 use entity::prelude::{Group, UserGroupRel};
 
-use crate::{AppRes, Res, user};
+use crate::{AppRes, message, Res, user};
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::err::{ErrPrint, ServerError};
+use crate::message::{MessageTarget, MessageTargetGroup, SendMsgReq};
 use crate::user::UserErr;
 use crate::validate::ValidatedJson;
 
@@ -47,6 +48,7 @@ impl GroupApi {
             .route("/all", get(all))
             .route("/:gid/:uid", put(add).delete(remove))
             .route("/:gid", delete(delete_group).get(detail))
+            .route("/:gid/send", put(send))
             .route("/:gid/admin/:uid", patch(admin))
             .route("/:gid/forbid/:uid", put(forbid).delete(un_forbid))
             .with_state(app_state)
@@ -444,4 +446,15 @@ pub(crate) async fn get_user_by_gid(
 ) -> Result<Vec<entity::user::Model>, DbErr> {
     let uids = get_uids(&app_state, gid).await?;
     user::get_by_ids(uids, &app_state).await
+}
+
+async fn send(
+    State(app_state): State<AppState>,
+    Path(gid): Path<i32>,
+    token: Token,
+    ValidatedJson(msg): ValidatedJson<SendMsgReq>,
+) -> Res<i64> {
+    let payload = msg.build_payload(token.id, MessageTarget::Group(MessageTargetGroup { gid }));
+    let mid = message::send_msg(payload, app_state).await?;
+    return Ok(AppRes::success(mid));
 }

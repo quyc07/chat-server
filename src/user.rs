@@ -25,8 +25,8 @@ use crate::err::{ErrPrint, ServerError};
 use crate::format::datetime_format;
 use crate::format::opt_datetime_format;
 use crate::message::{
-    ChatMessage, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget,
-    MessageTargetUser, SendMsgReq,
+    ChatMessage, ChatMessagePayload, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget
+    , MessageTargetUser, SendMsgReq,
 };
 use crate::validate::ValidatedJson;
 
@@ -200,36 +200,36 @@ struct Params {
     after_mid: Option<i64>,
 }
 
+/// 查询用户最新消息，包括群和用户消息
 async fn history(
     State(app_state): State<AppState>,
     Query(params): Query<Params>,
     token: Token,
-) -> Res<HashMap<i32, Vec<ChatMessage>>> {
-    // let messages = app_state
-    //     .msg_db
-    //     .lock()
-    //     .unwrap()
-    //     .messages()
-    //     .fetch_user_messages_after(token.id as i64, params.after_mid, i32::MAX as usize)?;
-    // let chat_messages = messages
-    //     .into_iter()
-    //     .filter_map(|(id, data)| {
-    //         Some(id).zip(serde_json::from_slice::<ChatMessagePayload>(&data).ok())
-    //     })
-    //     .map(|(id, payload)| ChatMessage::new(id, payload))
-    //     .collect::<Vec<ChatMessage>>();
-    // let mut target_uid_2_msg = chat_messages.into_iter().into_group_map_by(|x| {
-    //     if x.payload.from_uid == token.id {
-    //         x.payload.to_uid
-    //     } else {
-    //         x.payload.from_uid
-    //     }
-    // });
-    // target_uid_2_msg.iter_mut().for_each(|(_, v)| {
-    //     v.sort_by(|msg1, msg2| msg2.payload.create_time.cmp(&msg1.payload.create_time))
-    // });
-    // Ok(AppRes::success(target_uid_2_msg))
-    todo!("查询历史消息");
+) -> Res<HashMap<String, Vec<ChatMessage>>> {
+    let messages = app_state
+        .msg_db
+        .lock()
+        .unwrap()
+        .messages()
+        .fetch_user_messages_after(token.id as i64, params.after_mid, i32::MAX as usize)?;
+    let chat_messages = messages
+        .into_iter()
+        .filter_map(|(id, data)| {
+            Some(id).zip(serde_json::from_slice::<ChatMessagePayload>(&data).ok())
+        })
+        .map(|(id, payload)| ChatMessage::new(id, payload))
+        .collect::<Vec<ChatMessage>>();
+    let mut target_uid_2_msg = chat_messages.into_iter().into_group_map_by(|x| {
+        if x.payload.from_uid == token.id {
+            x.payload.target.into()
+        } else {
+            MessageTarget::User(MessageTargetUser { uid: token.id }).into()
+        }
+    });
+    target_uid_2_msg.iter_mut().for_each(|(_, v)| {
+        v.sort_by(|msg1, msg2| msg2.payload.created_at.cmp(&msg1.payload.created_at))
+    });
+    Ok(AppRes::success(target_uid_2_msg))
 }
 
 pub async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::Model>, DbErr> {
