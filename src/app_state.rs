@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
-use once_cell::sync::Lazy;
 use sea_orm::{Database, DatabaseConnection};
 use tokio::sync::broadcast;
 
@@ -19,7 +18,7 @@ pub struct AppState {
     pub event_sender: Arc<broadcast::Sender<Arc<BroadcastEvent>>>,
 }
 
-static ENVS: Lazy<HashMap<String, String>> = Lazy::new(|| {
+static ENVS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
     let string = fs::read_to_string(".env").unwrap();
     let env = string.lines();
     env.into_iter()

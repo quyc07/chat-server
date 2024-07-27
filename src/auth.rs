@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::Add;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use axum::{async_trait, RequestPartsExt};
@@ -14,7 +15,6 @@ use axum_extra::TypedHeader;
 use chrono::{DateTime, Local};
 use jsonwebtoken::{decode, DecodingKey, encode, EncodingKey, Header, TokenData, Validation};
 use moka::future::Cache;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -26,7 +26,7 @@ use crate::app_state::AppState;
 use crate::err::{ErrPrint, ServerError};
 use crate::validate::ValidatedJson;
 
-const KEYS: Lazy<Keys> = Lazy::new(|| {
+const KEYS: LazyLock<Keys, fn() -> Keys> = LazyLock::new(|| {
     let secret = std::env::var("JWT_SECRET").unwrap_or("abc".to_string());
     Keys::new(secret.as_bytes())
 });
@@ -36,7 +36,7 @@ const KEYS: Lazy<Keys> = Lazy::new(|| {
 //     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 // const 修饰的变量是只读的，运行时无法修改，因此该缓存只能使用static修饰
-static LOGIN_USER: Lazy<Cache<i32, Token>> = Lazy::new(|| {
+static LOGIN_USER: LazyLock<Cache<i32, Token>> = LazyLock::new(|| {
     Cache::builder()
         // 空闲时间与jwt过期时间保持一致
         .time_to_idle(Duration::from_secs(SECOND_TO_EXPIRED))
@@ -148,9 +148,7 @@ async fn login(
     State(app_state): State<AppState>,
     ValidatedJson(req): ValidatedJson<UserLoginReq>,
 ) -> Res<UserLoginRes> {
-    let user = user::find_by_name(&app_state, &req.name)
-        .await?
-        .unwrap();
+    let user = user::find_by_name(&app_state, &req.name).await?.unwrap();
     if user.password != req.password {
         return Err(ServerError::from(AuthError::WrongCredentials));
     }
