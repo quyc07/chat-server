@@ -41,3 +41,4 @@ utoipa-swagger-ui = { version = "7.1.0", features = ["axum"] }
 log = "0.4.20"
 moka = { version = "0.12.8", features = ["future"] }
 time = "0.3.36"
+reqwest = { version = "0.12.5", features = ["json"] }

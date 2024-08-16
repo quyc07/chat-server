@@ -1,32 +1,11 @@
 version: '3'
 services:
-  mysql:
-    image: mysql:latest
-    container_name: mysql
-    restart: always
+  dgraph:
+    # docker run -it -p 8080:8080 -p 9080:9080 -v ~/dgraph:/dgraph dgraph/standalone:latest
+    image: dgraph/standalone:latest
+    container_name: dgraph
     ports:
-      - 3306:3306
+      - "8080:8080"
+      - "9080:9080"
     volumes:
-      - D:\volume\mysql:/var/lib/mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: Aa123456
-      TZ: Asia/Shanghai
-  nginx:
-    image: nginx:latest
-    container_name: web
-    ports:
-      - 80:80
-      - 443:443
-    volumes:
-      - D:\volume\nginx\nginx.conf:/etc/nginx/nginx.conf
-      - D:\https:/opt/nginx/ssl_key
-  onlyoffice:
-    image: onlyoffice/documentserver:latest
-    container_name: onlyoffice
-    ports:
-      - 443:443
-    volumes:
-      - D:\volume\onlyoffice:/var/www/onlyoffice/Data
-    environment:
-      JWT_SECRET: abc123
-      USE_UNAUTHORIZED_STORAGE: true
+      - ~/volume/dgraph:/graph
