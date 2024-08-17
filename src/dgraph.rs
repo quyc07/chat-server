@@ -33,41 +33,119 @@ struct UserDgraph {
 
 const DGRAPH_URL: &str = "http://localhost:8080";
 
-//
-// {
-//   "set": [
-//     {
-//       "name": "Bob",
-//       "phone": "12345678"
-//     }
-//   ]
-// }
-async fn set(Json(req): Json<UserDgraph>) -> Res<()> {
+/// mutate request:
+/// {
+///   "set": [
+///     {
+///       "name": "Bob2",
+///       "phone": "123456781",
+///   	  "dgraph.type":"User",
+///       "uid":"_:user"
+/// 	}
+///   ]
+/// }
+/// response:
+/// {
+///   "data": {
+///     "code": "Success",
+///     "message": "Done",
+///     "queries": null,
+///     "uids": {
+///       "user": "0x4e2d"
+///     }
+///   },
+///   "extensions": {
+///     "server_latency": {
+///       "parsing_ns": 74250,
+///       "processing_ns": 1840625,
+///       "assign_timestamp_ns": 783792,
+///       "total_ns": 2947625
+///     },
+///     "txn": {
+///       "start_ts": 20387,
+///       "commit_ts": 20388,
+///       "preds": [
+///         "1-0-dgraph.type",
+///         "1-0-name",
+///         "1-0-phone"
+///       ]
+///     }
+///   }
+/// }
+///
+async fn set(Json(req): Json<UserDgraph>) -> Res<String> {
     let client = reqwest::Client::new();
-    let url = format!("{}/mutate", DGRAPH_URL);
-    // let mut map = HashMap::new();
-    // map.insert("set", vec![req]);
+    // 直接提交事务 参考：https://dgraph.io/docs/dql/clients/raw-http/#committing-the-transaction
+    let url = format!("{}/mutate?commitNow=true", DGRAPH_URL);
     let value = json!({
-        "name":req.name,
-        "phone":req.phone,
-        "dgraph.type":"User"
-    });
-    let param = value.as_object().ok_or(ServerError::CustomErr(
-        "fail to convert req to map".to_string(),
-    ))?;
-
-    match client.post(url).json(param).send().await {
-        Ok(res) => match res.text().await {
-            Ok(res) => {
-                info!(res);
-                Ok(AppRes::success(()))
+        "set":[
+            {
+                "name":req.name,
+                "phone":req.phone,
+                "dgraph.type":"User",
+                "uid":"_:uid"
             }
+        ]
+    });
+    match client.post(url).json(&value).send().await {
+        Ok(res) => match res
+            .json::<DgraphRes<MutateData<HashMap<String, String>>>>()
+            .await
+        {
+            Ok(res) => match res.data.uids.get("uid") {
+                None => Err(ServerError::CustomErr("fail to set user".to_string())),
+                Some(uid) => Ok(AppRes::success(uid.clone())),
+            },
             Err(err) => Err(ServerError::CustomErr(err.to_string())),
         },
         Err(err) => Err(ServerError::CustomErr(err.to_string())),
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct Uid {
+    uid: String,
+}
+
+/// query request:
+/// {
+///     users(func: type(User)) {
+///         uid
+///         name
+///         phone
+///     }
+/// }
+/// response:
+/// {
+///   "data": {
+///     "users": [
+///       {
+///         "uid": "0x4e2c",
+///         "name": "Bob1"
+///       }
+///     ]
+///   },
+///   "extensions": {
+///     "server_latency": {
+///       "parsing_ns": 55125,
+///       "processing_ns": 971458,
+///       "encoding_ns": 55625,
+///       "assign_timestamp_ns": 677583,
+///       "total_ns": 1887375
+///     },
+///     "txn": {
+///       "start_ts": 20359
+///     },
+///     "metrics": {
+///       "num_uids": {
+///         "_total": 2,
+///         "dgraph.type": 0,
+///         "name": 1,
+///         "uid": 1
+///       }
+///     }
+///   }
+/// }
 async fn all() -> Res<Vec<UserDgraph>> {
     let client = reqwest::Client::new();
     let url = format!("{}/query", DGRAPH_URL);
@@ -86,7 +164,10 @@ async fn all() -> Res<Vec<UserDgraph>> {
         .send()
         .await
     {
-        Ok(res) => match res.json::<QueryRes<UserDgraph>>().await {
+        Ok(res) => match res
+            .json::<DgraphRes<HashMap<String, Vec<UserDgraph>>>>()
+            .await
+        {
             Ok(res) => {
                 info!("{}", format!("{:?}", res));
                 match res.data.get("users") {
@@ -99,68 +180,21 @@ async fn all() -> Res<Vec<UserDgraph>> {
         Err(err) => Err(ServerError::CustomErr(err.to_string())),
     }
 }
-//{
-//   "data": {
-//     "users": [
-//       {
-//         "uid": "0x4e2c",
-//         "name": "Bob1"
-//       }
-//     ]
-//   },
-//   "extensions": {
-//     "server_latency": {
-//       "parsing_ns": 55125,
-//       "processing_ns": 971458,
-//       "encoding_ns": 55625,
-//       "assign_timestamp_ns": 677583,
-//       "total_ns": 1887375
-//     },
-//     "txn": {
-//       "start_ts": 20359
-//     },
-//     "metrics": {
-//       "num_uids": {
-//         "_total": 2,
-//         "dgraph.type": 0,
-//         "name": 1,
-//         "uid": 1
-//       }
-//     }
-//   }
-// }
+
+/// {
+///     "code": "Success",
+///     "message": "Done",
+///     "queries": null,
+///     "uids": {
+///       "user": "0x4e2d"
+///     }
+/// }
 #[derive(Debug, Deserialize, Serialize)]
-struct QueryRes<T> {
-    data: HashMap<String, Vec<T>>,
-    extensions: Extensions,
+struct MutateData<T> {
+    uids: T,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct Extensions {
-    server_latency: ServerLatency,
-    txn: Txn,
-    metrics: Metrics,
-}
-#[derive(Debug, Deserialize, Serialize)]
-struct ServerLatency {
-    parsing_ns: i32,
-    processing_ns: i32,
-    encoding_ns: i32,
-    assign_timestamp_ns: i32,
-    total_ns: i32,
-}
-#[derive(Debug, Deserialize, Serialize)]
-struct Txn {
-    start_ts: i32,
-}
-#[derive(Debug, Deserialize, Serialize)]
-struct Metrics {
-    num_uids: NumUids,
-}
-#[derive(Debug, Deserialize, Serialize)]
-struct NumUids {
-    _total: i32,
-    name: i32,
-    phone: i32,
-    uid: i32,
+struct DgraphRes<T> {
+    data: T,
 }
