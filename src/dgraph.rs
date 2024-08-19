@@ -3,7 +3,7 @@ use crate::err::ServerError;
 use crate::validate::ValidatedJson;
 use crate::{AppRes, Res};
 use axum::extract::State;
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use reqwest::{Error, Response};
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,7 @@ impl DgraphApi {
         Router::new()
             .route("/user", post(set))
             .route("/user/all", get(all))
+            .route("/user/friend", put(set_friend_ship))
             .with_state(app_state)
     }
 }
@@ -197,4 +198,48 @@ struct MutateData<T> {
 #[derive(Debug, Deserialize, Serialize)]
 struct DgraphRes<T> {
     data: T,
+}
+
+#[derive(Deserialize, Serialize)]
+struct FriendShipReq {
+    subject: String,
+    object: String,
+}
+
+/// 建立好友关系
+async fn set_friend_ship(Json(req): Json<FriendShipReq>) -> Res<()> {
+    let client = reqwest::Client::new();
+    let url = format!("{}/mutate?commitNow=true", DGRAPH_URL);
+    let set_friend_ship = SetFriendShip {
+        set: vec![Object {
+            uid: req.object,
+            friend: vec![Subject { uid: req.subject }],
+        }],
+    };
+    let result = client.post(url).json(&set_friend_ship).send().await;
+    match result {
+        Ok(res) => match res.text().await {
+            Ok(res) => {
+                info!(res);
+                Ok(AppRes::success(()))
+            }
+            Err(err) => Err(ServerError::CustomErr(err.to_string())),
+        },
+        Err(err) => Err(ServerError::CustomErr(err.to_string())),
+    }
+}
+#[derive(Serialize, Deserialize)]
+struct Subject {
+    pub uid: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Object {
+    pub uid: String,
+    pub friend: Vec<Subject>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SetFriendShip {
+    pub set: Vec<Object>,
 }
