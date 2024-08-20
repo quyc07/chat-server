@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
 use axum::extract::{Path, Query, State};
-use axum::Router;
 use axum::routing::{get, patch, post};
+use axum::Router;
 use chrono::{DateTime, Local, Offset};
 use itertools::Itertools;
+use sea_orm::ActiveValue::Set;
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter,
 };
-use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
@@ -18,17 +18,18 @@ use validator::Validate;
 use entity::prelude::User;
 use entity::user;
 
-use crate::{AppRes, auth, message, Res};
 use crate::app_state::AppState;
 use crate::auth::Token;
+use crate::dgraph::UserDgraph;
 use crate::err::{ErrPrint, ServerError};
 use crate::format::datetime_format;
 use crate::format::opt_datetime_format;
 use crate::message::{
-    ChatMessage, ChatMessagePayload, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget
-    , MessageTargetUser, SendMsgReq,
+    ChatMessage, ChatMessagePayload, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget,
+    MessageTargetUser, SendMsgReq,
 };
 use crate::validate::ValidatedJson;
+use crate::{auth, dgraph, message, AppRes, Res};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -114,19 +115,29 @@ async fn register(
     if find_by_name(&app_state, name).await?.is_some() {
         return Err(ServerError::from(UserErr::UserNameExist(name.to_string())));
     }
-
-    let user = user::ActiveModel {
+    // save db
+    let mut user = user::ActiveModel {
         id: Default::default(),
-        name: Set(req.name),
+        name: Set(req.name.clone()),
         password: Set(req.password),
         email: Set(req.email),
-        phone: Set(req.phone),
+        phone: Set(req.phone.clone()),
         create_time: Default::default(),
         update_time: Default::default(),
         status: ActiveValue::NotSet,
+        dgraph_uid: Default::default(),
     };
-    let model = user.insert(&app_state.db).await?;
-    Ok(AppRes::success(UserRes::from(model)))
+    let user = user.insert(&app_state.db).await?;
+    // save dgraph, get dgraph_uid
+    let dgraph_uid = dgraph::register(UserDgraph {
+        name: req.name,
+        phone: req.phone,
+    })
+    .await?;
+    let mut user = user.into_active_model();
+    user.dgraph_uid = Set(dgraph_uid);
+    let user = user.update(&app_state.db).await?;
+    Ok(AppRes::success(UserRes::from(user)))
 }
 
 /// The new user.
@@ -143,6 +154,7 @@ struct UserRes {
     #[serde(with = "opt_datetime_format")]
     pub update_time: Option<DateTime<Local>>,
     pub status: String,
+    pub dgraph_uid: String,
 }
 
 impl From<user::Model> for UserRes {
@@ -161,6 +173,7 @@ impl From<user::Model> for UserRes {
                 DateTime::<Local>::from_naive_utc_and_offset(t, Local::now().offset().fix())
             }),
             status: value.status.into(),
+            dgraph_uid: value.dgraph_uid,
         }
     }
 }

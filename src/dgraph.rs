@@ -1,5 +1,6 @@
 use crate::app_state::AppState;
-use crate::err::ServerError;
+use crate::auth::AuthError;
+use crate::err::{ErrPrint, ServerError};
 use crate::validate::ValidatedJson;
 use crate::{AppRes, Res};
 use axum::extract::State;
@@ -21,15 +22,14 @@ impl DgraphApi {
         Router::new()
             .route("/user", post(set))
             .route("/user/all", get(all))
-            .route("/user/friend", put(set_friend_ship))
             .with_state(app_state)
     }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct UserDgraph {
-    name: String,
-    phone: String,
+pub struct UserDgraph {
+    pub(crate) name: String,
+    pub(crate) phone: Option<String>,
 }
 
 const DGRAPH_URL: &str = "http://localhost:8080";
@@ -100,6 +100,35 @@ async fn set(Json(req): Json<UserDgraph>) -> Res<String> {
             Err(err) => Err(ServerError::CustomErr(err.to_string())),
         },
         Err(err) => Err(ServerError::CustomErr(err.to_string())),
+    }
+}
+
+pub async fn register(ud: UserDgraph) -> Result<String, ServerError> {
+    let client = reqwest::Client::new();
+    // 直接提交事务 参考：https://dgraph.io/docs/dql/clients/raw-http/#committing-the-transaction
+    let url = format!("{}/mutate?commitNow=true", DGRAPH_URL);
+    let value = json!({
+        "set":[
+            {
+                "name":ud.name,
+                "phone":ud.phone,
+                "dgraph.type":"User",
+                "uid":"_:uid"
+            }
+        ]
+    });
+    match client.post(url).json(&value).send().await {
+        Ok(res) => match res
+            .json::<DgraphRes<MutateData<HashMap<String, String>>>>()
+            .await
+        {
+            Ok(res) => match res.data.uids.get("uid") {
+                None => Err(ServerError::CustomErr("fail to set user".to_string())),
+                Some(uid) => Ok(uid.clone()),
+            },
+            Err(err) => Err(ServerError::from(err)),
+        },
+        Err(err) => Err(ServerError::from(err)),
     }
 }
 
@@ -200,34 +229,28 @@ struct DgraphRes<T> {
     data: T,
 }
 
-#[derive(Deserialize, Serialize)]
-struct FriendShipReq {
-    subject: String,
-    object: String,
+struct FriendShip {
+    uid_1: String,
+    uid_2: String,
 }
 
+impl ErrPrint for Error {}
+
 /// 建立好友关系
-async fn set_friend_ship(Json(req): Json<FriendShipReq>) -> Res<()> {
+pub async fn set_friend_ship(friend_ship: FriendShip) -> Result<(), ServerError> {
     let client = reqwest::Client::new();
     let url = format!("{}/mutate?commitNow=true", DGRAPH_URL);
-    let set_friend_ship = SetFriendShip {
-        set: vec![Object {
-            uid: req.object,
-            friend: vec![Subject { uid: req.subject }],
-        }],
-    };
+    let set_friend_ship = SetFriendShip::new(friend_ship.uid_1, friend_ship.uid_2);
     let result = client.post(url).json(&set_friend_ship).send().await;
     match result {
         Ok(res) => match res.text().await {
-            Ok(res) => {
-                info!(res);
-                Ok(AppRes::success(()))
-            }
-            Err(err) => Err(ServerError::CustomErr(err.to_string())),
+            Ok(_) => Ok(()),
+            Err(err) => Err(ServerError::from(err)),
         },
-        Err(err) => Err(ServerError::CustomErr(err.to_string())),
+        Err(err) => Err(ServerError::from(err)),
     }
 }
+
 #[derive(Serialize, Deserialize)]
 struct Subject {
     pub uid: String,
@@ -242,4 +265,15 @@ struct Object {
 #[derive(Serialize, Deserialize)]
 struct SetFriendShip {
     pub set: Vec<Object>,
+}
+
+impl SetFriendShip {
+    fn new(object_id: String, subject_id: String) -> Self {
+        SetFriendShip {
+            set: vec![Object {
+                uid: object_id,
+                friend: vec![Subject { uid: subject_id }],
+            }],
+        }
+    }
 }

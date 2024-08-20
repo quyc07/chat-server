@@ -34,6 +34,8 @@ pub enum ServerError {
     MsgErr(#[from] msg::Error),
     #[error(transparent)]
     IoErr(#[from] std::io::Error),
+    #[error(transparent)]
+    ReqwestErr(#[from] reqwest::Error),
 }
 
 impl IntoResponse for ServerError {
@@ -101,6 +103,10 @@ impl IntoResponse for ServerError {
                 (StatusCode::OK, Json(AppRes::fail_with_msg(err.to_string())))
             }
             ServerError::CustomErr(err) => {
+                err.print();
+                (StatusCode::OK, Json(AppRes::fail_with_msg(err.to_string())))
+            }
+            ServerError::ReqwestErr(err) => {
                 err.print();
                 (StatusCode::OK, Json(AppRes::fail_with_msg(err.to_string())))
             }
