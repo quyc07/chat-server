@@ -5,18 +5,29 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "status")]
-pub enum Status {
+pub enum UserStatus {
     #[sea_orm(string_value = "NORMAL")]
     Normal,
     #[sea_orm(string_value = "FREEZE")]
     Freeze,
 }
 
-impl From<Status> for String {
-    fn from(value: Status) -> Self {
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "status")]
+pub enum FriendRequestStatus {
+    #[sea_orm(string_value = "WAIT")]
+    WAIT,
+    #[sea_orm(string_value = "APPROVE")]
+    APPROVE,
+    #[sea_orm(string_value = "REJECT")]
+    REJECT,
+}
+
+impl From<UserStatus> for String {
+    fn from(value: UserStatus) -> Self {
         match value {
-            Status::Normal => "Normal",
-            Status::Freeze => "Freeze",
+            UserStatus::Normal => "Normal",
+            UserStatus::Freeze => "Freeze",
         }
         .to_string()
     }

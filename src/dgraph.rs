@@ -277,3 +277,7 @@ impl SetFriendShip {
         }
     }
 }
+
+pub(crate) fn is_friend(uid: i32) -> bool {
+    return false
+}
