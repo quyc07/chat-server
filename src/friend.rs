@@ -81,3 +81,7 @@ async fn request(
         }
     }
 }
+
+async fn review_req() -> Res<()> {
+    todo!("待实现审核好友申请")
+}
