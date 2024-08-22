@@ -4,27 +4,27 @@ use std::ops::Add;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use axum::{async_trait, RequestPartsExt};
 use axum::extract::{FromRequest, FromRequestParts, State};
 use axum::http::request::Parts;
-use axum::Router;
 use axum::routing::{delete, post};
-use axum_extra::headers::Authorization;
+use axum::Router;
+use axum::{async_trait, RequestPartsExt};
 use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
 use chrono::{DateTime, Local};
-use jsonwebtoken::{decode, DecodingKey, encode, EncodingKey, Header, TokenData, Validation};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use moka::future::Cache;
-use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 use validator::Validate;
 
-use crate::{AppRes, Res, user};
 use crate::app_state::AppState;
 use crate::err::{ErrPrint, ServerError};
 use crate::validate::ValidatedJson;
+use crate::{user, AppRes, Res};
 
 const KEYS: LazyLock<Keys, fn() -> Keys> = LazyLock::new(|| {
     let secret = std::env::var("JWT_SECRET").unwrap_or("abc".to_string());
@@ -49,6 +49,7 @@ pub struct Token {
     pub name: String,
     pub email: String,
     pub phone: Option<String>,
+    pub dgraph_uid: Option<String>,
     // 失效时间，timestamp
     exp: i64,
 }
@@ -60,6 +61,7 @@ impl From<entity::user::Model> for Token {
             name: value.name,
             email: value.email,
             phone: value.phone,
+            dgraph_uid: value.dgraph_uid,
             exp: expire_timestamp(),
         }
     }
@@ -231,7 +233,7 @@ mod test {
     use serde::{Deserialize, Serialize};
     use sha2::Sha256;
 
-    use crate::auth::{AuthError, KEYS, Token};
+    use crate::auth::{AuthError, Token, KEYS};
 
     #[test]
     fn test_token() {
@@ -240,6 +242,7 @@ mod test {
             name: "name".to_string(),
             email: "email".to_string(),
             phone: None,
+            dgraph_uid: None,
             exp: Local::now().add(Duration::from_secs(3)).timestamp(),
         };
 

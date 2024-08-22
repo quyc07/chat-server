@@ -6,6 +6,7 @@ use crate::{AppRes, Res};
 use axum::extract::State;
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
+use moka::ops::compute::Op;
 use reqwest::{Error, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -181,12 +182,12 @@ async fn all() -> Res<Vec<UserDgraph>> {
     let url = format!("{}/query", DGRAPH_URL);
     let body = "
         {
-    users(func: type(User)) {
-        uid
-        name
-        phone
-    }
-    }";
+            users(func: type(User)) {
+                uid
+                name
+                phone
+            }
+        }";
     match client
         .post(url)
         .header("Content-type", "application/dql")
@@ -222,6 +223,11 @@ async fn all() -> Res<Vec<UserDgraph>> {
 #[derive(Debug, Deserialize, Serialize)]
 struct MutateData<T> {
     uids: T,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct UidData<T> {
+    user: Vec<T>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -278,6 +284,125 @@ impl SetFriendShip {
     }
 }
 
-pub(crate) fn is_friend(uid: i32) -> bool {
-    return false
+/// 查询用户好友关系
+/// {
+///   user(func: uid("0x4e37")) {
+///     uid
+///     name
+///     friend {
+///       uid,
+///       name
+///     }
+///   }
+/// }
+pub(crate) async fn is_friend(dgraph_uid: Option<String>, friend_id: i32) -> Result<bool, Error> {
+    match dgraph_uid {
+        None => Ok(false),
+        Some(dgraph_uid) => Ok(match get_friends(dgraph_uid.as_str()).await? {
+            None => false,
+            Some(friendRes) => friendRes
+                .friends
+                .unwrap_or(vec![])
+                .iter()
+                .find(|&friend| {
+                    friend
+                        .user_id
+                        .map(|user_id| user_id == friend_id)
+                        .or(Some(false))
+                        .unwrap()
+                })
+                .is_some(),
+        }),
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+struct Friend {
+    uid: String,
+    user_id: Option<i32>,
+    name: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+struct FriendRes {
+    uid: String,
+    user_id: Option<i32>,
+    name: String,
+    friends: Option<Vec<Friend>>,
+}
+
+pub(crate) async fn get_friends(dgraph_uid: &str) -> Result<Option<FriendRes>, Error> {
+    let client = reqwest::Client::new();
+    let url = format!("{}/query", DGRAPH_URL);
+    let value = "
+    {
+        user(func: uid("
+        .to_string()
+        + "\""
+        + dgraph_uid
+        + "\""
+        + ")) {
+            uid
+            name
+            user_id
+            friend {
+                uid,
+                name,
+                user_id
+            }
+        }
+    }";
+    let res = client
+        .post(url)
+        .body(value)
+        .header("Content-type", "application/dql")
+        .send()
+        .await?;
+    let res = res.json::<DgraphRes<UidData<FriendRes>>>().await?;
+    Ok(res.data.user.first().map(|t| t.clone()))
+}
+
+#[cfg(test)]
+mod test {
+    use crate::dgraph::{DgraphRes, FriendRes, UidData};
+    use serde_json::json;
+
+    #[test]
+    fn test() {
+        let value = json!({
+          "data": {
+            "user": [
+              {
+                "uid": "0x4e42",
+                "name": "andy"
+              }
+            ]
+          },
+          "extensions": {
+            "server_latency": {
+              "parsing_ns": 107000,
+              "processing_ns": 877959,
+              "encoding_ns": 77250,
+              "assign_timestamp_ns": 661417,
+              "total_ns": 1801625
+            },
+            "txn": {
+              "start_ts": 21044
+            },
+            "metrics": {
+              "num_uids": {
+                "": 1,
+                "_total": 5,
+                "friend": 1,
+                "name": 1,
+                "uid": 1,
+                "user_id": 1
+              }
+            }
+          }
+        });
+        let result =
+            serde_json::from_slice::<DgraphRes<UidData<FriendRes>>>(value.to_string().as_ref());
+        println!("{:?}", result)
+    }
 }

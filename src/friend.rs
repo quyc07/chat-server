@@ -28,12 +28,12 @@ struct Request {
 
 async fn request(
     State(app_state): State<AppState>,
-    Path(uid): Path<i32>,
+    Path(friend_id): Path<i32>,
     token: Token,
     Json(Request { reason }): Json<Request>,
 ) -> Res<()> {
     // 1. 若两者已是好友，则直接返回
-    if dgraph::is_friend(uid) {
+    if dgraph::is_friend(token.dgraph_uid, friend_id).await? {
         return Ok(AppRes::success_with_msg(
             "已经是好友，无需再次申请".to_string(),
         ));
@@ -41,7 +41,7 @@ async fn request(
     // 2. 查看是否已有请求记录
     match FriendRequest::find()
         .filter(friend_request::Column::RequestId.eq(token.id))
-        .filter(friend_request::Column::TargetId.eq(uid))
+        .filter(friend_request::Column::TargetId.eq(friend_id))
         .one(&app_state.db)
         .await?
     {
@@ -69,7 +69,7 @@ async fn request(
             friend_request::ActiveModel {
                 id: Default::default(),
                 request_id: Set(token.id),
-                target_id: Set(uid),
+                target_id: Set(friend_id),
                 reason: Set(reason),
                 status: Default::default(),
                 create_time: Default::default(),
