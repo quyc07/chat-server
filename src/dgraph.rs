@@ -223,6 +223,8 @@ async fn all() -> Res<Vec<UserDgraph>> {
 /// }
 #[derive(Debug, Deserialize, Serialize)]
 struct MutateData<T> {
+    code: String,
+    message: String,
     uids: T,
 }
 
