@@ -6,6 +6,7 @@ use crate::{AppRes, Res};
 use axum::extract::State;
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
+use itertools::Itertools;
 use moka::ops::compute::Op;
 use reqwest::{Client, Error, Response};
 use serde::{Deserialize, Serialize};
@@ -233,6 +234,7 @@ struct UidData<T> {
 #[derive(Debug, Deserialize, Serialize)]
 struct DgraphRes<T> {
     data: T,
+    extensions: Extensions,
 }
 
 pub struct FriendShip {
@@ -245,19 +247,42 @@ impl ErrPrint for Error {}
 /// 建立好友关系
 pub async fn set_friend_ship(friend_ship: FriendShip) -> Result<(), ServerError> {
     let client = Client::new();
-    let url = format!("{}/mutate?commitNow=true", DGRAPH_URL);
-    do_set_friend_ship(
+    let url = format!("{DGRAPH_URL}/mutate");
+    // 开启事务
+    let txn = do_set_friend_ship(
         SetFriendShip::new(friend_ship.uid_1.clone(), friend_ship.uid_2.clone()),
         client.clone(),
         url.clone(),
     )
     .await?;
-    do_set_friend_ship(
+    // 加入事务
+    let url = format!("{url}?startTs={}", txn.start_ts);
+    let txn = do_set_friend_ship(
         SetFriendShip::new(friend_ship.uid_2, friend_ship.uid_1),
-        client,
+        client.clone(),
         url,
     )
     .await?;
+    // 提交事务
+    commit(txn).await?;
+    Ok(())
+}
+
+/// 提交dgraph的事务
+async fn commit(txn: Txn) -> Result<(), ServerError> {
+    let client = Client::new();
+    let url = format!("{DGRAPH_URL}/commit?startTs={}", txn.start_ts);
+    let keys = txn
+        .keys
+        .ok_or(ServerError::CustomErr("未找到事务".to_string()))?;
+    client
+        .post(url)
+        .json(&json!({
+            "keys":keys,
+            "preds":txn.preds,
+        }))
+        .send()
+        .await?;
     Ok(())
 }
 
@@ -265,15 +290,15 @@ async fn do_set_friend_ship(
     set_friend_ship: SetFriendShip,
     client: Client,
     url: String,
-) -> Result<(), ServerError> {
-    client
+) -> Result<Txn, ServerError> {
+    let res = client
         .post(url)
         .json(&set_friend_ship)
         .send()
         .await?
-        .text()
+        .json::<DgraphRes<MutateData<HashMap<String, String>>>>()
         .await?;
-    Ok(())
+    Ok(res.extensions.txn)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -424,4 +449,26 @@ mod test {
             serde_json::from_slice::<DgraphRes<UidData<FriendRes>>>(value.to_string().as_ref());
         println!("{:?}", result)
     }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Txn {
+    pub start_ts: i64,
+    pub commit_ts: Option<i64>,
+    pub keys: Option<Vec<String>>,
+    pub preds: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ServerLatency {
+    pub parsing_ns: i64,
+    pub processing_ns: i64,
+    pub assign_timestamp_ns: Option<i64>,
+    pub total_ns: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Extensions {
+    pub server_latency: ServerLatency,
+    pub txn: Txn,
 }
