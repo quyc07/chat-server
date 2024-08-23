@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::option::Option;
 
 use axum::extract::{Path, Query, State};
 use axum::routing::{get, patch, post};
 use axum::Router;
-use chrono::{DateTime, Local, Offset};
+use chrono::{DateTime, Local};
 use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{
@@ -20,16 +21,16 @@ use entity::user;
 
 use crate::app_state::AppState;
 use crate::auth::Token;
+use crate::datetime::datetime_format;
+use crate::datetime::opt_datetime_format;
 use crate::dgraph::UserDgraph;
 use crate::err::{ErrPrint, ServerError};
-use crate::format::datetime_format;
-use crate::format::opt_datetime_format;
 use crate::message::{
     ChatMessage, ChatMessagePayload, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget,
     MessageTargetUser, SendMsgReq,
 };
 use crate::validate::ValidatedJson;
-use crate::{auth, dgraph, message, AppRes, Res};
+use crate::{auth, datetime, dgraph, message, AppRes, Res};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -165,13 +166,10 @@ impl From<user::Model> for UserRes {
             email: value.email,
             phone: value.phone,
             password: value.password,
-            create_time: DateTime::<Local>::from_naive_utc_and_offset(
-                value.create_time,
-                Local::now().offset().fix(),
-            ),
-            update_time: value.update_time.map(|t| {
-                DateTime::<Local>::from_naive_utc_and_offset(t, Local::now().offset().fix())
-            }),
+            create_time: datetime::native_datetime_2_datetime(value.create_time),
+            update_time: value
+                .update_time
+                .map(|t| datetime::native_datetime_2_datetime(t)),
             status: value.status.into(),
             dgraph_uid: value.dgraph_uid.unwrap_or("暂未生成".to_string()),
         }
@@ -266,6 +264,14 @@ pub async fn get_by_ids(uids: Vec<i32>, app_state: &AppState) -> Result<Vec<user
         .all(&app_state.db)
         .await
 }
+
+pub async fn get_by_id(uid: i32, app_state: &AppState) -> Result<Option<user::Model>, DbErr> {
+    User::find()
+        .filter(user::Column::Id.eq(uid))
+        .one(&app_state.db)
+        .await
+}
+
 #[derive(Deserialize, ToSchema, Validate)]
 struct PasswordReq {
     #[validate(length(min = 1, message = "password is blank"))]

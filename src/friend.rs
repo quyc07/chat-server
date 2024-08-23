@@ -1,15 +1,18 @@
 use crate::app_state::AppState;
 use crate::auth::Token;
-use crate::{dgraph, AppRes, Res};
+use crate::datetime::datetime_format;
+use crate::{datetime, dgraph, user, AppRes, Res};
 use axum::extract::{Path, State};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::{DateTime, Local};
 use entity::friend_request;
 use entity::prelude::FriendRequest;
 use entity::sea_orm_active_enums::FriendRequestStatus;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub struct FriendApi;
 
@@ -17,6 +20,7 @@ impl FriendApi {
     pub fn route(app_state: AppState) -> Router {
         Router::new()
             .route("/req/:uid", post(request))
+            .route("/req", get(req_list))
             .with_state(app_state)
     }
 }
@@ -82,6 +86,44 @@ async fn request(
     }
 }
 
-async fn review_req() -> Res<()> {
+#[derive(Debug, Serialize)]
+struct FriendReqVo {
+    id: i32,
+    request_id: i32,
+    request_name: String,
+    #[serde(with = "datetime_format")]
+    create_time: DateTime<Local>,
+    reason: Option<String>,
+    status: FriendRequestStatus,
+}
+
+async fn req_list(State(app_state): State<AppState>, token: Token) -> Res<Vec<FriendReqVo>> {
+    let reqs = FriendRequest::find()
+        .filter(friend_request::Column::TargetId.eq(token.id))
+        .all(&app_state.db)
+        .await?;
+    let id_2_name = user::get_by_ids(reqs.iter().map(|x| x.request_id).collect(), &app_state)
+        .await?
+        .iter()
+        .map(|user| (user.id, user.name.clone()))
+        .collect::<HashMap<i32, String>>();
+    Ok(AppRes::success(
+        reqs.iter()
+            .map(|req| FriendReqVo {
+                id: req.id,
+                request_id: req.request_id,
+                request_name: id_2_name
+                    .get(&req.request_id)
+                    .unwrap_or(&"未知用户".to_string())
+                    .to_string(),
+                create_time: datetime::native_datetime_2_datetime(req.create_time),
+                reason: req.reason.clone(),
+                status: req.status.clone(),
+            })
+            .collect(),
+    ))
+}
+
+async fn review() -> Res<()> {
     todo!("待实现审核好友申请")
 }

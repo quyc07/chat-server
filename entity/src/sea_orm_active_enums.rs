@@ -12,7 +12,7 @@ pub enum UserStatus {
     Freeze,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "status")]
 pub enum FriendRequestStatus {
     #[sea_orm(string_value = "WAIT")]

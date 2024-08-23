@@ -1,4 +1,4 @@
-use chrono::Offset;
+use chrono::{DateTime, Local, NaiveDateTime, Offset};
 
 /// 自定义 Option<DateTime> 序列化
 pub mod opt_native_datetime_format {
@@ -145,4 +145,8 @@ pub mod datetime_format {
             .map_err(serde::de::Error::custom)?;
         Ok(date_time)
     }
+}
+
+pub fn native_datetime_2_datetime(value: NaiveDateTime) -> DateTime<Local> {
+    DateTime::<Local>::from_naive_utc_and_offset(value, Local::now().offset().fix())
 }

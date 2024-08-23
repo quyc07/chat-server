@@ -11,7 +11,7 @@ pub mod app_state;
 pub mod auth;
 pub mod err;
 pub mod event;
-pub mod format;
+pub mod datetime;
 pub mod group;
 pub mod log;
 pub mod open_api;
