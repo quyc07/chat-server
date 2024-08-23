@@ -1,6 +1,8 @@
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::datetime::datetime_format;
+use crate::dgraph::FriendShip;
+use crate::err::ServerError;
 use crate::{datetime, dgraph, user, AppRes, Res};
 use axum::extract::{Path, State};
 use axum::routing::{get, post};
@@ -20,7 +22,7 @@ impl FriendApi {
     pub fn route(app_state: AppState) -> Router {
         Router::new()
             .route("/req/:uid", post(request))
-            .route("/req", get(req_list))
+            .route("/req", get(req_list).post(review))
             .with_state(app_state)
     }
 }
@@ -124,6 +126,43 @@ async fn req_list(State(app_state): State<AppState>, token: Token) -> Res<Vec<Fr
     ))
 }
 
-async fn review() -> Res<()> {
-    todo!("待实现审核好友申请")
+#[derive(Deserialize)]
+struct ReviewReq {
+    id: i32,
+    status: FriendRequestStatus,
+}
+
+async fn review(
+    State(app_state): State<AppState>,
+    token: Token,
+    Json(req): Json<ReviewReq>,
+) -> Res<()> {
+    // 1. 更新db状态
+    match FriendRequest::find_by_id(req.id).one(&app_state.db).await? {
+        None => Ok(AppRes::success(())),
+        Some(fr) => {
+            if fr.target_id != token.id {
+                return Err(ServerError::CustomErr(
+                    "您不是该好友请求的目标对象，无权批准".to_string(),
+                ));
+            }
+            let mut fr = fr.into_active_model();
+            fr.status = Set(req.status);
+            let fr = fr.update(&app_state.db).await?;
+            // 2. 建立dgraph好友关系
+            let request_user = user::get_by_id(fr.request_id, &app_state)
+                .await?
+                .ok_or(user::UserErr::UserNotExist(fr.request_id))?;
+            let target_user = user::get_by_id(fr.target_id, &app_state)
+                .await?
+                .ok_or(user::UserErr::UserNotExist(fr.target_id))?;
+            Ok(AppRes::success(
+                dgraph::set_friend_ship(FriendShip {
+                    uid_1: request_user.dgraph_uid.unwrap(),
+                    uid_2: target_user.dgraph_uid.unwrap(),
+                })
+                .await?,
+            ))
+        }
+    }
 }

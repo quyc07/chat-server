@@ -7,7 +7,7 @@ use axum::extract::State;
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use moka::ops::compute::Op;
-use reqwest::{Error, Response};
+use reqwest::{Client, Error, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -235,26 +235,45 @@ struct DgraphRes<T> {
     data: T,
 }
 
-struct FriendShip {
-    uid_1: String,
-    uid_2: String,
+pub struct FriendShip {
+    pub uid_1: String,
+    pub uid_2: String,
 }
 
 impl ErrPrint for Error {}
 
 /// 建立好友关系
 pub async fn set_friend_ship(friend_ship: FriendShip) -> Result<(), ServerError> {
-    let client = reqwest::Client::new();
+    let client = Client::new();
     let url = format!("{}/mutate?commitNow=true", DGRAPH_URL);
-    let set_friend_ship = SetFriendShip::new(friend_ship.uid_1, friend_ship.uid_2);
-    let result = client.post(url).json(&set_friend_ship).send().await;
-    match result {
-        Ok(res) => match res.text().await {
-            Ok(_) => Ok(()),
-            Err(err) => Err(ServerError::from(err)),
-        },
-        Err(err) => Err(ServerError::from(err)),
-    }
+    do_set_friend_ship(
+        SetFriendShip::new(friend_ship.uid_1.clone(), friend_ship.uid_2.clone()),
+        client.clone(),
+        url.clone(),
+    )
+    .await?;
+    do_set_friend_ship(
+        SetFriendShip::new(friend_ship.uid_2, friend_ship.uid_1),
+        client,
+        url,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn do_set_friend_ship(
+    set_friend_ship: SetFriendShip,
+    client: Client,
+    url: String,
+) -> Result<(), ServerError> {
+    client
+        .post(url)
+        .json(&set_friend_ship)
+        .send()
+        .await?
+        .text()
+        .await?;
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
