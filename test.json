@@ -1,0 +1,38 @@
+{
+  "data": {
+    "user": [
+      {
+        "uid": "0x4e41",
+        "name": "andy6",
+        "friend": [
+          {
+            "uid": "0x4e43",
+            "name": "andy1"
+          }
+        ]
+      }
+    ]
+  },
+  "extensions": {
+    "server_latency": {
+      "parsing_ns": 288792,
+      "processing_ns": 3252625,
+      "encoding_ns": 416416,
+      "assign_timestamp_ns": 2506416,
+      "total_ns": 7209459
+    },
+    "txn": {
+      "start_ts": 21183
+    },
+    "metrics": {
+      "num_uids": {
+        "": 1,
+        "_total": 8,
+        "friend": 1,
+        "name": 2,
+        "uid": 2,
+        "user_id": 2
+      }
+    }
+  }
+}

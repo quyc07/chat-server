@@ -16,7 +16,7 @@ pub struct Model {
     pub create_time: DateTime,
     pub update_time: Option<DateTime>,
     pub status: UserStatus,
-    pub dgraph_uid: Option<String>,
+    pub dgraph_uid: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

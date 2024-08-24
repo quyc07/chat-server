@@ -10,7 +10,7 @@ use axum::{Json, Router};
 use chrono::{DateTime, Local};
 use entity::friend_request;
 use entity::prelude::FriendRequest;
-use entity::sea_orm_active_enums::FriendRequestStatus;
+use entity::sea_orm_active_enums::{FriendRequestStatus, UserStatus};
 use sea_orm::ActiveValue::Set;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter};
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,7 @@ pub struct FriendApi;
 impl FriendApi {
     pub fn route(app_state: AppState) -> Router {
         Router::new()
+            .route("/", get(list))
             .route("/req/:uid", post(request))
             .route("/req", get(req_list).post(review))
             .with_state(app_state)
@@ -158,11 +159,48 @@ async fn review(
                 .ok_or(user::UserErr::UserNotExist(fr.target_id))?;
             Ok(AppRes::success(
                 dgraph::set_friend_ship(FriendShip {
-                    uid_1: request_user.dgraph_uid.unwrap(),
-                    uid_2: target_user.dgraph_uid.unwrap(),
+                    uid_1: request_user.dgraph_uid,
+                    uid_2: target_user.dgraph_uid,
                 })
                 .await?,
             ))
         }
+    }
+}
+
+#[derive(Serialize)]
+struct Friend {
+    id: i32,
+    name: String,
+    status: UserStatus,
+}
+
+async fn list(State(app_state): State<AppState>, token: Token) -> Res<Vec<Friend>> {
+    match dgraph::get_friends(token.dgraph_uid.as_str()).await? {
+        None => Ok(AppRes::success(vec![])),
+        Some(res) => match res.friend {
+            None => Ok(AppRes::success(vec![])),
+            Some(friends) => {
+                let id_2_status =
+                    user::get_by_ids(friends.iter().map(|f| f.user_id).collect(), &app_state)
+                        .await?
+                        .iter()
+                        .map(|user| (user.id, user.status.clone()))
+                        .collect::<HashMap<i32, UserStatus>>();
+                Ok(AppRes::success(
+                    friends
+                        .iter()
+                        .map(|friend| Friend {
+                            id: friend.user_id,
+                            name: friend.name.clone(),
+                            status: id_2_status
+                                .get(&friend.user_id)
+                                .unwrap_or(&UserStatus::Freeze)
+                                .clone(),
+                        })
+                        .collect(),
+                ))
+            }
+        },
     }
 }

@@ -49,7 +49,7 @@ pub struct Token {
     pub name: String,
     pub email: String,
     pub phone: Option<String>,
-    pub dgraph_uid: Option<String>,
+    pub dgraph_uid: String,
     // 失效时间，timestamp
     exp: i64,
 }

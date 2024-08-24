@@ -136,7 +136,7 @@ async fn register(
     })
     .await?;
     let mut user = user.into_active_model();
-    user.dgraph_uid = Set(Some(dgraph_uid));
+    user.dgraph_uid = Set(dgraph_uid);
     let user = user.update(&app_state.db).await?;
     Ok(AppRes::success(UserRes::from(user)))
 }
@@ -171,7 +171,7 @@ impl From<user::Model> for UserRes {
                 .update_time
                 .map(|t| datetime::native_datetime_2_datetime(t)),
             status: value.status.into(),
-            dgraph_uid: value.dgraph_uid.unwrap_or("暂未生成".to_string()),
+            dgraph_uid: value.dgraph_uid,
         }
     }
 }

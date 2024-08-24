@@ -277,11 +277,14 @@ async fn commit(txn: Txn) -> Result<(), ServerError> {
     let keys = txn
         .keys
         .ok_or(ServerError::CustomErr("未找到事务".to_string()))?;
+    let preds = txn
+        .preds
+        .ok_or(ServerError::CustomErr("未找到事务".to_string()))?;
     client
         .post(url)
         .json(&json!({
             "keys":keys,
-            "preds":txn.preds,
+            "preds":preds,
         }))
         .send()
         .await?;
@@ -341,44 +344,35 @@ impl SetFriendShip {
 ///     }
 ///   }
 /// }
-pub(crate) async fn is_friend(dgraph_uid: Option<String>, friend_id: i32) -> Result<bool, Error> {
-    match dgraph_uid {
-        None => Ok(false),
-        Some(dgraph_uid) => Ok(match get_friends(dgraph_uid.as_str()).await? {
-            None => false,
-            Some(friendRes) => friendRes
-                .friends
-                .unwrap_or(vec![])
-                .iter()
-                .find(|&friend| {
-                    friend
-                        .user_id
-                        .map(|user_id| user_id == friend_id)
-                        .or(Some(false))
-                        .unwrap()
-                })
-                .is_some(),
-        }),
-    }
+pub(crate) async fn is_friend(dgraph_uid: String, friend_id: i32) -> Result<bool, Error> {
+    Ok(match get_friends(dgraph_uid.as_str()).await? {
+        None => false,
+        Some(friendRes) => friendRes
+            .friend
+            .unwrap_or(vec![])
+            .iter()
+            .find(|&friend| friend.user_id == friend_id)
+            .is_some(),
+    })
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-struct Friend {
-    uid: String,
-    user_id: Option<i32>,
-    name: String,
+pub struct Friend {
+    pub uid: String,
+    pub user_id: i32,
+    pub name: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-struct FriendRes {
-    uid: String,
-    user_id: Option<i32>,
-    name: String,
-    friends: Option<Vec<Friend>>,
+pub struct FriendRes {
+    pub uid: String,
+    pub user_id: i32,
+    pub name: String,
+    pub friend: Option<Vec<Friend>>,
 }
 
 pub(crate) async fn get_friends(dgraph_uid: &str) -> Result<Option<FriendRes>, Error> {
-    let client = reqwest::Client::new();
+    let client = Client::new();
     let url = format!("{}/query", DGRAPH_URL);
     let value = "
     {
@@ -458,7 +452,7 @@ struct Txn {
     pub start_ts: i64,
     pub commit_ts: Option<i64>,
     pub keys: Option<Vec<String>>,
-    pub preds: Vec<String>,
+    pub preds: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
