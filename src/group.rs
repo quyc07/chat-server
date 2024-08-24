@@ -1,31 +1,31 @@
 use std::collections::{HashMap, HashSet};
 
 use axum::extract::{Path, State};
-use axum::Router;
 use axum::routing::{delete, get, patch, post, put};
+use axum::Router;
 use futures::{FutureExt, StreamExt, TryStreamExt};
+use sea_orm::ActiveValue::Set;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter,
     TransactionTrait,
 };
-use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_stream::StreamExt as OtherStreamExt;
 use utoipa::{OpenApi, ToSchema};
 use validator::Validate;
 
-use entity::{group, user_group_rel};
 use entity::group::Model;
 use entity::prelude::{Group, UserGroupRel};
+use entity::{group, user_group_rel};
 
-use crate::{AppRes, message, Res, user};
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::err::{ErrPrint, ServerError};
 use crate::message::{MessageTarget, MessageTargetGroup, SendMsgReq};
 use crate::user::UserErr;
 use crate::validate::ValidatedJson;
+use crate::{message, user, AppRes, Res};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -252,7 +252,7 @@ async fn remove(
         .filter(user_group_rel::Column::UserId.eq(req.uid))
         .exec(&app_state.db)
         .await?;
-    return Ok(AppRes::success(()));
+    Ok(AppRes::success(()))
 }
 
 async fn delete_group(
@@ -275,7 +275,7 @@ async fn delete_group(
         .await?;
     // 提交事务
     x.commit().await?;
-    return Ok(AppRes::success(()));
+    Ok(AppRes::success(()))
 }
 
 #[derive(Serialize)]
@@ -456,5 +456,5 @@ async fn send(
 ) -> Res<i64> {
     let payload = msg.build_payload(token.id, MessageTarget::Group(MessageTargetGroup { gid }));
     let mid = message::send_msg(payload, app_state).await?;
-    return Ok(AppRes::success(mid));
+    Ok(AppRes::success(mid))
 }

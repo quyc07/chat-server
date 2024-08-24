@@ -242,7 +242,7 @@ mod test {
             name: "name".to_string(),
             email: "email".to_string(),
             phone: None,
-            dgraph_uid: None,
+            dgraph_uid: Default::default(),
             exp: Local::now().add(Duration::from_secs(3)).timestamp(),
         };
 
