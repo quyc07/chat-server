@@ -90,7 +90,7 @@ impl ErrPrint for UserErr {}
 
 async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<UserRes>> {
     let result = User::find().all(&app_state.db).await;
-    let model = result.unwrap();
+    let model = result?;
     Ok(AppRes::success(
         model.into_iter().map(UserRes::from).collect(),
     ))
@@ -184,10 +184,13 @@ async fn send(
     token: Token,
     ValidatedJson(msg): ValidatedJson<SendMsgReq>,
 ) -> Res<i64> {
-    // TODO 判断是否是好友
+    // 判断是否是好友
+    if !friend::is_friend(token.dgraph_uid, uid).await {
+        return Err(ServerError::from(friend::FriendErr::NotFriend(uid)));
+    }
     let payload = msg.build_payload(token.id, MessageTarget::User(MessageTargetUser { uid }));
     let mid = message::send_msg(payload, app_state).await?;
-    return Ok(AppRes::success(mid));
+    Ok(AppRes::success(mid))
 }
 
 async fn get_history_msg(
@@ -195,6 +198,9 @@ async fn get_history_msg(
     Path(uid): Path<i32>,
     token: Token,
 ) -> Res<Vec<ChatMessage>> {
+    if !friend::is_friend(token.dgraph_uid, uid).await {
+        return Err(ServerError::from(friend::FriendErr::NotFriend(uid)));
+    }
     Ok(AppRes::success(message::get_history_msg(
         app_state,
         HistoryMsgReq::User(HistoryMsgUser {

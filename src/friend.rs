@@ -3,7 +3,7 @@ mod dgraph;
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::datetime::datetime_format;
-use crate::err::ServerError;
+use crate::err::{ErrPrint, ServerError};
 use crate::{datetime, user, AppRes, Res};
 use axum::extract::{Path, State};
 use axum::routing::{get, post};
@@ -16,6 +16,8 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use thiserror::Error;
+use utoipa::ToSchema;
 
 pub struct FriendApi;
 
@@ -28,6 +30,16 @@ impl FriendApi {
             .with_state(app_state)
     }
 }
+
+#[derive(Debug, Error, ToSchema)]
+pub(crate) enum FriendErr {
+    #[error("用户{0}不是您的好友")]
+    NotFriend(i32),
+    #[error("您不是该好友请求的目标对象，无权批准")]
+    CanNotReviewFriendRequest,
+}
+
+impl ErrPrint for FriendErr {}
 
 #[derive(Deserialize)]
 struct Request {
@@ -144,9 +156,7 @@ async fn review(
         None => Ok(AppRes::success(())),
         Some(fr) => {
             if fr.target_id != token.id {
-                return Err(ServerError::CustomErr(
-                    "您不是该好友请求的目标对象，无权批准".to_string(),
-                ));
+                return Err(ServerError::from(FriendErr::CanNotReviewFriendRequest));
             }
             let mut fr = fr.into_active_model();
             fr.status = Set(req.status);
@@ -210,4 +220,8 @@ pub(crate) struct FriendRegister {
 
 pub(crate) async fn register(fr: FriendRegister) -> Result<String, ServerError> {
     dgraph::register(fr).await
+}
+
+pub(crate) async fn is_friend(object_graph_id: String, user_id: i32) -> bool {
+    dgraph::is_friend(object_graph_id, user_id).await.unwrap_or(false)
 }

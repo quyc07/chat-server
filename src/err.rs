@@ -12,7 +12,7 @@ use validator::ValidationErrors;
 use crate::auth::AuthError;
 use crate::group::GroupErr;
 use crate::user::UserErr;
-use crate::AppRes;
+use crate::{friend, AppRes};
 
 #[derive(Debug, Error, ToSchema)]
 pub enum ServerError {
@@ -36,6 +36,8 @@ pub enum ServerError {
     IoErr(#[from] std::io::Error),
     #[error(transparent)]
     ReqwestErr(#[from] reqwest::Error),
+    #[error(transparent)]
+    FriendErr(#[from] friend::FriendErr),
 }
 
 impl IntoResponse for ServerError {
@@ -107,6 +109,10 @@ impl IntoResponse for ServerError {
                 (StatusCode::OK, Json(AppRes::fail_with_msg(err.to_string())))
             }
             ServerError::ReqwestErr(err) => {
+                err.print();
+                (StatusCode::OK, Json(AppRes::fail_with_msg(err.to_string())))
+            }
+            ServerError::FriendErr(err) => {
                 err.print();
                 (StatusCode::OK, Json(AppRes::fail_with_msg(err.to_string())))
             }
