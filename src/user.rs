@@ -23,14 +23,14 @@ use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::datetime::datetime_format;
 use crate::datetime::opt_datetime_format;
-use crate::dgraph::UserDgraph;
 use crate::err::{ErrPrint, ServerError};
+use crate::friend::FriendRegister;
 use crate::message::{
     ChatMessage, ChatMessagePayload, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget,
     MessageTargetUser, SendMsgReq,
 };
 use crate::validate::ValidatedJson;
-use crate::{auth, datetime, dgraph, message, AppRes, Res};
+use crate::{auth, datetime, friend, message, AppRes, Res};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -130,7 +130,8 @@ async fn register(
     };
     let user = user.insert(&app_state.db).await?;
     // save dgraph, get dgraph_uid
-    let dgraph_uid = dgraph::register(UserDgraph {
+    let dgraph_uid = friend::register(FriendRegister {
+        user_id: user.id,
         name: req.name,
         phone: req.phone,
     })
@@ -183,6 +184,7 @@ async fn send(
     token: Token,
     ValidatedJson(msg): ValidatedJson<SendMsgReq>,
 ) -> Res<i64> {
+    // TODO 判断是否是好友
     let payload = msg.build_payload(token.id, MessageTarget::User(MessageTargetUser { uid }));
     let mid = message::send_msg(payload, app_state).await?;
     return Ok(AppRes::success(mid));

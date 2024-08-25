@@ -1,9 +1,10 @@
+mod dgraph;
+
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::datetime::datetime_format;
-use crate::dgraph::FriendShip;
 use crate::err::ServerError;
-use crate::{datetime, dgraph, user, AppRes, Res};
+use crate::{datetime, user, AppRes, Res};
 use axum::extract::{Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -158,11 +159,7 @@ async fn review(
                 .await?
                 .ok_or(user::UserErr::UserNotExist(fr.target_id))?;
             Ok(AppRes::success(
-                dgraph::set_friend_ship(FriendShip {
-                    uid_1: request_user.dgraph_uid,
-                    uid_2: target_user.dgraph_uid,
-                })
-                .await?,
+                dgraph::set_friend_ship(request_user.dgraph_uid, target_user.dgraph_uid).await?,
             ))
         }
     }
@@ -203,4 +200,14 @@ async fn list(State(app_state): State<AppState>, token: Token) -> Res<Vec<Friend
             }
         },
     }
+}
+
+pub(crate) struct FriendRegister {
+    pub(crate) user_id: i32,
+    pub(crate) name: String,
+    pub(crate) phone: Option<String>,
+}
+
+pub(crate) async fn register(fr: FriendRegister) -> Result<String, ServerError> {
+    dgraph::register(fr).await
 }

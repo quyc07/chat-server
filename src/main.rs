@@ -10,7 +10,6 @@ use utoipa_swagger_ui::{SwaggerUi, Url};
 
 use chat_server::app_state::AppState;
 use chat_server::auth::TokenApi;
-use chat_server::dgraph::DgraphApi;
 use chat_server::event::EventApi;
 use chat_server::friend::FriendApi;
 use chat_server::group::GroupApi;
@@ -36,9 +35,7 @@ async fn main() {
         .nest("/group", GroupApi::route(app_state.clone()))
         .nest("/token", TokenApi::route(app_state.clone()))
         .nest("/event", EventApi::route(app_state.clone()))
-        .nest("/dgraph", DgraphApi::route(app_state.clone()))
-        .nest("/friend", FriendApi::route(app_state.clone()))
-        ;
+        .nest("/friend", FriendApi::route(app_state.clone()));
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
     info!("chat server started!");
