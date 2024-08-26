@@ -7,17 +7,12 @@ use axum::Router;
 use chrono::{DateTime, Local};
 use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
-use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 use utoipa::{OpenApi, ToSchema};
 use validator::Validate;
-
-use entity::prelude::User;
-use entity::user;
 
 use crate::app_state::AppState;
 use crate::auth::Token;
@@ -31,6 +26,8 @@ use crate::message::{
 };
 use crate::validate::ValidatedJson;
 use crate::{auth, datetime, friend, message, AppRes, Res};
+use entity::prelude::User;
+use entity::user;
 
 #[derive(OpenApi)]
 #[openapi(
