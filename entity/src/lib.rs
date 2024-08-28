@@ -8,3 +8,4 @@ pub mod group;
 pub mod user_group_rel;
 
 pub mod friend_request;
+pub mod read_index;

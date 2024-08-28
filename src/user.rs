@@ -2,12 +2,15 @@ use std::collections::HashMap;
 use std::option::Option;
 
 use axum::extract::{Path, Query, State};
-use axum::routing::{get, patch, post};
-use axum::Router;
+use axum::routing::{get, patch, post, put};
+use axum::{Json, Router};
 use chrono::{DateTime, Local};
 use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
-use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter};
+use sea_orm::{
+    sea_query, ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, IntoActiveModel,
+    QueryFilter,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
@@ -27,7 +30,7 @@ use crate::message::{
 use crate::validate::ValidatedJson;
 use crate::{auth, datetime, friend, message, AppRes, Res};
 use entity::prelude::User;
-use entity::user;
+use entity::{read_index, user};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -49,9 +52,10 @@ impl UserApi {
             .route("/register", post(register))
             .route("/all", get(all))
             .route("/:uid/send", post(send))
-            .route("/:uid/history", get(get_history_msg))
+            .route("/:uid/history", get(user_history))
             .route("/history", get(history))
             .route("/password", patch(password))
+            .route("/read-index", put(set_read_index))
             .with_state(app_state)
     }
 }
@@ -190,7 +194,7 @@ async fn send(
     Ok(AppRes::success(mid))
 }
 
-async fn get_history_msg(
+async fn user_history(
     State(app_state): State<AppState>,
     Path(uid): Path<i32>,
     token: Token,
@@ -299,4 +303,60 @@ async fn password(
             Ok(AppRes::success(()))
         }
     }
+}
+
+#[derive(Deserialize, Serialize)]
+enum UpdateReadIndex {
+    User { uid: i32, mid: i64 },
+    Group { gid: i32, mid: i64 },
+}
+
+async fn set_read_index(
+    State(app_state): State<AppState>,
+    token: Token,
+    Json(read_index): Json<UpdateReadIndex>,
+) -> Res<()> {
+    match read_index {
+        UpdateReadIndex::User { uid, mid } => {
+            let active_model = read_index::ActiveModel {
+                id: Set(Default::default()),
+                uid: Set(token.id),
+                target_uid: Set(Some(uid)),
+                target_gid: Default::default(),
+                mid: Set(mid),
+            };
+            read_index::Entity::insert(active_model)
+                .on_conflict(
+                    sea_query::OnConflict::columns([
+                        read_index::Column::Uid,
+                        read_index::Column::TargetUid,
+                    ])
+                    .update_column(read_index::Column::Mid)
+                    .to_owned(),
+                )
+                .exec(&app_state.db)
+                .await?;
+        }
+        UpdateReadIndex::Group { gid, mid } => {
+            let active_model = read_index::ActiveModel {
+                id: Set(Default::default()),
+                uid: Set(token.id),
+                target_uid: Default::default(),
+                target_gid: Set(Some(gid)),
+                mid: Set(mid),
+            };
+            read_index::Entity::insert(active_model)
+                .on_conflict(
+                    sea_query::OnConflict::columns([
+                        read_index::Column::Uid,
+                        read_index::Column::TargetGid,
+                    ])
+                    .update_column(read_index::Column::Mid)
+                    .to_owned(),
+                )
+                .exec(&app_state.db)
+                .await?;
+        }
+    }
+    Ok(AppRes::success(()))
 }
