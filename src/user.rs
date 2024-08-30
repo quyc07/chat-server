@@ -24,8 +24,8 @@ use crate::datetime::opt_datetime_format;
 use crate::err::{ErrPrint, ServerError};
 use crate::friend::FriendRegister;
 use crate::message::{
-    ChatMessage, HistoryMsgReq, HistoryMsgUser, HistoryReq,
-    MessageTarget, MessageTargetUser, SendMsgReq,
+    ChatMessage, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget, MessageTargetUser,
+    SendMsgReq,
 };
 use crate::validate::ValidatedJson;
 use crate::{auth, datetime, friend, message, AppRes, Res};
@@ -236,6 +236,8 @@ enum ChatListVo {
     Group {
         gid: i32,
         group_name: String,
+        uid: i32,
+        user_name: String,
         mid: i64,
         msg: String,
         #[serde(with = "datetime_format")]
@@ -375,8 +377,8 @@ async fn password(
 
 #[derive(Deserialize, Serialize)]
 enum UpdateReadIndex {
-    User { uid: i32, mid: i64 },
-    Group { gid: i32, mid: i64 },
+    User { uid: i32, mid: i64, uid_of_msg: i32 },
+    Group { gid: i32, mid: i64, uid_of_msg: i32 },
 }
 
 async fn set_read_index(
@@ -385,13 +387,18 @@ async fn set_read_index(
     Json(read_index): Json<UpdateReadIndex>,
 ) -> Res<()> {
     match read_index {
-        UpdateReadIndex::User { uid, mid } => {
+        UpdateReadIndex::User {
+            uid,
+            mid,
+            uid_of_msg,
+        } => {
             let active_model = read_index::ActiveModel {
                 id: Set(Default::default()),
                 uid: Set(token.id),
                 target_uid: Set(Some(uid)),
                 target_gid: Default::default(),
                 mid: Set(mid),
+                uid_of_msg: Set(uid_of_msg),
             };
             read_index::Entity::insert(active_model)
                 .on_conflict(
@@ -405,13 +412,18 @@ async fn set_read_index(
                 .exec(&app_state.db)
                 .await?;
         }
-        UpdateReadIndex::Group { gid, mid } => {
+        UpdateReadIndex::Group {
+            gid,
+            mid,
+            uid_of_msg,
+        } => {
             let active_model = read_index::ActiveModel {
                 id: Set(Default::default()),
                 uid: Set(token.id),
                 target_uid: Default::default(),
                 target_gid: Set(Some(gid)),
                 mid: Set(mid),
+                uid_of_msg: Set(uid_of_msg),
             };
             read_index::Entity::insert(active_model)
                 .on_conflict(

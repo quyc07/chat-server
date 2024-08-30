@@ -11,6 +11,7 @@ pub struct Model {
     pub target_uid: Option<i32>,
     pub target_gid: Option<i32>,
     pub mid: i64,
+    pub uid_of_msg: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
