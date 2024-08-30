@@ -9,7 +9,7 @@ use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{
     sea_query, ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, IntoActiveModel,
-    QueryFilter, QueryOrder, QuerySelect,
+    QueryFilter, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -32,7 +32,6 @@ use crate::{auth, datetime, friend, group, message, AppRes, Res};
 use entity::prelude::User;
 use entity::read_index::Model;
 use entity::{read_index, user};
-use migration::Order;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -266,7 +265,6 @@ async fn history(
 ) -> Res<ChatList> {
     let ris = read_index::Entity::find()
         .filter(read_index::Column::Uid.eq(token.id))
-        .order_by(read_index::Column::Mid, Order::Desc)
         .limit(limit)
         .all(&app_state.db)
         .await?;
@@ -325,7 +323,6 @@ async fn history(
         }
         None => vec![],
     };
-    // TODO chat_of_group
     let chat_of_group = match map.get(&ChatTarget::Group) {
         None => vec![],
         Some(ris_of_group) => {
@@ -385,8 +382,6 @@ async fn history(
         .chain(chat_of_group)
         .collect::<Vec<ChatListVo>>();
     vec.sort_by(|x1, x2| x2.get_msg_time().cmp(&x1.get_msg_time()));
-    // TODO 如何排序
-
     Ok(AppRes::success(ChatList { chat_list: vec }))
 }
 
