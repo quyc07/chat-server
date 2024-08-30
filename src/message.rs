@@ -80,6 +80,15 @@ pub enum MessageDetail {
     Replay(MessageReplay),
 }
 
+impl MessageDetail {
+    pub fn get_content(&self) -> String {
+        match self {
+            MessageDetail::Normal(msg) => msg.content.content.clone(),
+            MessageDetail::Replay(msg) => msg.content.content.clone(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MessageNormal {
     pub content: MessageContent,
@@ -174,7 +183,7 @@ pub struct HistoryMsgGroup {
 }
 
 pub(crate) fn get_history_msg(
-    app_state: AppState,
+    app_state: &AppState,
     history_msg_req: HistoryMsgReq,
 ) -> Vec<ChatMessage> {
     match history_msg_req {
@@ -191,7 +200,7 @@ pub(crate) fn get_history_msg(
                 .fetch_dm_messages_before(from_id as i64, to_id as i64, before, limit)
                 .ok();
             match result {
-                Some(msgs) => build_chat_message(msgs),
+                Some(msgs) => build_chat_messages(msgs),
                 None => vec![],
             }
         }
@@ -207,19 +216,38 @@ pub(crate) fn get_history_msg(
                 .fetch_group_messages_before(gid as i64, before, limit)
                 .ok();
             match result {
-                Some(msgs) => build_chat_message(msgs),
+                Some(msgs) => build_chat_messages(msgs),
                 None => vec![],
             }
         }
     }
 }
 
-fn build_chat_message(msgs: Vec<(i64, Vec<u8>)>) -> Vec<ChatMessage> {
+fn build_chat_messages(msgs: Vec<(i64, Vec<u8>)>) -> Vec<ChatMessage> {
     msgs.into_iter()
-        .filter_map(|(mid, msg)| {
-            serde_json::from_slice::<ChatMessagePayload>(&msg)
+        .filter_map(|(mid, msg)| build_chat_message(mid, msg))
+        .collect()
+}
+
+fn build_chat_message(mid: i64, msg: Vec<u8>) -> Option<ChatMessage> {
+    serde_json::from_slice::<ChatMessagePayload>(&msg)
+        .ok()
+        .map(|c| ChatMessage::new(mid, c))
+}
+
+pub(crate) fn get_by_mids(mids: Vec<i64>, app_state: &AppState) -> Vec<ChatMessage> {
+    mids.into_iter()
+        .filter_map(|mid| {
+            app_state
+                .msg_db
+                .lock()
+                .unwrap()
+                .messages()
+                .get(mid)
                 .ok()
-                .map(|c| ChatMessage::new(mid, c))
+                .flatten()
+                .map(|msg| (mid, msg))
         })
+        .filter_map(|(mid, msg)| build_chat_message(mid, msg))
         .collect()
 }

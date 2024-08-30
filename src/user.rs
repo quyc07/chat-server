@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::option::Option;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Local};
@@ -9,7 +9,7 @@ use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{
     sea_query, ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, IntoActiveModel,
-    QueryFilter,
+    QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -24,13 +24,15 @@ use crate::datetime::opt_datetime_format;
 use crate::err::{ErrPrint, ServerError};
 use crate::friend::FriendRegister;
 use crate::message::{
-    ChatMessage, ChatMessagePayload, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget,
-    MessageTargetUser, SendMsgReq,
+    ChatMessage, HistoryMsgReq, HistoryMsgUser, HistoryReq,
+    MessageTarget, MessageTargetUser, SendMsgReq,
 };
 use crate::validate::ValidatedJson;
 use crate::{auth, datetime, friend, message, AppRes, Res};
 use entity::prelude::User;
+use entity::read_index::Model;
 use entity::{read_index, user};
+use migration::Order;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -53,7 +55,7 @@ impl UserApi {
             .route("/all", get(all))
             .route("/:uid/send", post(send))
             .route("/:uid/history", get(user_history))
-            .route("/history", get(history))
+            .route("/history/:limit", get(history))
             .route("/password", patch(password))
             .route("/read-index", put(set_read_index))
             .with_state(app_state)
@@ -203,7 +205,7 @@ async fn user_history(
         return Err(ServerError::from(friend::FriendErr::NotFriend(uid)));
     }
     Ok(AppRes::success(message::get_history_msg(
-        app_state,
+        &app_state,
         HistoryMsgReq::User(HistoryMsgUser {
             from_id: token.id,
             to_id: uid,
@@ -215,41 +217,107 @@ async fn user_history(
     )))
 }
 
-#[derive(Debug, Deserialize)]
-struct Params {
-    after_mid: Option<i64>,
+#[derive(Hash, Clone, PartialEq, Eq)]
+enum ChatTarget {
+    User,
+    Group,
 }
 
-/// 查询用户最新消息，包括群和用户消息
+#[derive(Debug, Serialize, Hash, Eq, PartialEq)]
+enum ChatListVo {
+    User {
+        uid: i32,
+        user_name: String,
+        mid: i64,
+        msg: String,
+        #[serde(with = "datetime_format")]
+        msg_time: DateTime<Local>,
+    },
+    Group {
+        gid: i32,
+        group_name: String,
+        mid: i64,
+        msg: String,
+        #[serde(with = "datetime_format")]
+        msg_time: DateTime<Local>,
+    },
+    Nothing,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatList {
+    list: Vec<ChatListVo>,
+}
+
+/// 查询用户最近聊天列表
 async fn history(
     State(app_state): State<AppState>,
-    Query(params): Query<Params>,
+    Path(limit): Path<u64>,
     token: Token,
-) -> Res<HashMap<String, Vec<ChatMessage>>> {
-    let messages = app_state
-        .msg_db
-        .lock()
-        .unwrap()
-        .messages()
-        .fetch_user_messages_after(token.id as i64, params.after_mid, i32::MAX as usize)?;
-    let chat_messages = messages
+) -> Res<ChatList> {
+    let ris = read_index::Entity::find()
+        .filter(read_index::Column::Uid.eq(token.id))
+        .order_by(read_index::Column::Mid, Order::Desc)
+        .limit(limit)
+        .all(&app_state.db)
+        .await?;
+    let map = ris
         .into_iter()
-        .filter_map(|(id, data)| {
-            Some(id).zip(serde_json::from_slice::<ChatMessagePayload>(&data).ok())
+        .filter_map(|x| match (x.target_uid, x.target_gid) {
+            (Some(_), None) => Some((ChatTarget::User, x)),
+            (None, Some(_)) => Some((ChatTarget::Group, x)),
+            _ => None,
         })
-        .map(|(id, payload)| ChatMessage::new(id, payload))
-        .collect::<Vec<ChatMessage>>();
-    let mut target_uid_2_msg = chat_messages.into_iter().into_group_map_by(|x| {
-        if x.payload.from_uid == token.id {
-            x.payload.target.into()
-        } else {
-            MessageTarget::User(MessageTargetUser { uid: token.id }).into()
+        .into_iter()
+        .into_group_map_by(|(t, m)| t.clone())
+        .into_iter()
+        .map(|(target, x)| {
+            (
+                target,
+                x.into_iter().map(|(_, g)| g).collect::<Vec<Model>>(),
+            )
+        })
+        .collect::<HashMap<ChatTarget, Vec<Model>>>();
+
+    let chat_of_user = match map.get(&ChatTarget::User) {
+        Some(ri_of_users) => {
+            let (uids, mids) = ri_of_users
+                .iter()
+                .map(|x| (x.target_uid.unwrap(), x.mid))
+                .collect::<(Vec<i32>, Vec<i64>)>();
+            let uid_2_name = get_by_ids(uids, &app_state)
+                .await?
+                .into_iter()
+                .map(|x| (x.id, x.name))
+                .collect::<HashMap<i32, String>>();
+            let mid_2_msg = message::get_by_mids(mids, &app_state)
+                .into_iter()
+                .map(|x| (x.mid, x))
+                .collect::<HashMap<i64, ChatMessage>>();
+            ri_of_users
+                .into_iter()
+                .map(|x| ChatListVo::User {
+                    uid: x.target_uid.unwrap(),
+                    user_name: uid_2_name
+                        .get(&x.target_uid.unwrap())
+                        .unwrap_or(&String::from("未知用户"))
+                        .to_string(),
+                    mid: x.mid,
+                    msg: mid_2_msg
+                        .get(&x.mid)
+                        .map(|x| x.payload.detail.get_content())
+                        .unwrap_or(String::from("")),
+                    msg_time: mid_2_msg
+                        .get(&x.mid)
+                        .map(|x| x.payload.created_at)
+                        .unwrap_or(Local::now()),
+                })
+                .collect()
         }
-    });
-    target_uid_2_msg.iter_mut().for_each(|(_, v)| {
-        v.sort_by(|msg1, msg2| msg2.payload.created_at.cmp(&msg1.payload.created_at))
-    });
-    Ok(AppRes::success(target_uid_2_msg))
+        None => vec![],
+    };
+    // TODO chat_of_group
+    Ok(AppRes::success(ChatList { list: chat_of_user }))
 }
 
 pub async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::Model>, DbErr> {
