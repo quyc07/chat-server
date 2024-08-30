@@ -458,3 +458,10 @@ async fn send(
     let mid = message::send_msg(payload, app_state).await?;
     Ok(AppRes::success(mid))
 }
+
+pub(crate) async fn get_by_gids(gids: Vec<i32>, app_state: &AppState) -> Result<Vec<Model>, DbErr> {
+    Group::find()
+        .filter(group::Column::Id.is_in(gids))
+        .all(&app_state.db)
+        .await
+}

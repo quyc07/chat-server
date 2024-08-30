@@ -28,7 +28,7 @@ use crate::message::{
     SendMsgReq,
 };
 use crate::validate::ValidatedJson;
-use crate::{auth, datetime, friend, message, AppRes, Res};
+use crate::{auth, datetime, friend, group, message, AppRes, Res};
 use entity::prelude::User;
 use entity::read_index::Model;
 use entity::{read_index, user};
@@ -243,14 +243,21 @@ enum ChatListVo {
         #[serde(with = "datetime_format")]
         msg_time: DateTime<Local>,
     },
-    Nothing,
+}
+
+impl ChatListVo {
+    fn get_msg_time(&self) -> &DateTime<Local> {
+        match self {
+            ChatListVo::User { msg_time, .. } => msg_time,
+            ChatListVo::Group { msg_time, .. } => msg_time,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
 struct ChatList {
-    list: Vec<ChatListVo>,
+    chat_list: Vec<ChatListVo>,
 }
-
 /// 查询用户最近聊天列表
 async fn history(
     State(app_state): State<AppState>,
@@ -319,7 +326,68 @@ async fn history(
         None => vec![],
     };
     // TODO chat_of_group
-    Ok(AppRes::success(ChatList { list: chat_of_user }))
+    let chat_of_group = match map.get(&ChatTarget::Group) {
+        None => vec![],
+        Some(ris_of_group) => {
+            let (uids, mids) = ris_of_group
+                .iter()
+                .map(|x| ((x.target_gid.unwrap(), x.uid_of_msg), x.mid))
+                .collect::<(Vec<(i32, i32)>, Vec<i64>)>();
+            let gids = ris_of_group
+                .iter()
+                .map(|x| x.target_gid.unwrap())
+                .collect::<Vec<i32>>();
+            let uids = uids.into_iter().fold(vec![], |mut x, (u1, u2)| {
+                x.into_iter().chain(vec![u1, u2]).collect()
+            });
+            let uid_2_name = get_by_ids(uids, &app_state)
+                .await?
+                .into_iter()
+                .map(|x| (x.id, x.name))
+                .collect::<HashMap<i32, String>>();
+            let mid_2_msg = message::get_by_mids(mids, &app_state)
+                .into_iter()
+                .map(|x| (x.mid, x))
+                .collect::<HashMap<i64, ChatMessage>>();
+            let gid_2_name = group::get_by_gids(gids, &app_state)
+                .await?
+                .into_iter()
+                .map(|x| (x.id, x.name))
+                .collect::<HashMap<i32, String>>();
+            ris_of_group
+                .into_iter()
+                .map(|x| ChatListVo::Group {
+                    gid: x.target_gid.unwrap(),
+                    group_name: gid_2_name
+                        .get(&x.target_gid.unwrap())
+                        .unwrap_or(&String::from("未知群聊"))
+                        .to_string(),
+                    uid: x.uid_of_msg,
+                    user_name: uid_2_name
+                        .get(&x.uid_of_msg)
+                        .unwrap_or(&String::from("未知用户"))
+                        .to_string(),
+                    mid: x.mid,
+                    msg: mid_2_msg
+                        .get(&x.mid)
+                        .map(|x| x.payload.detail.get_content())
+                        .unwrap_or(String::from("")),
+                    msg_time: mid_2_msg
+                        .get(&x.mid)
+                        .map(|x| x.payload.created_at)
+                        .unwrap_or(Local::now()),
+                })
+                .collect()
+        }
+    };
+    let mut vec = chat_of_user
+        .into_iter()
+        .chain(chat_of_group)
+        .collect::<Vec<ChatListVo>>();
+    vec.sort_by(|x1, x2| x2.get_msg_time().cmp(&x1.get_msg_time()));
+    // TODO 如何排序
+
+    Ok(AppRes::success(ChatList { chat_list: vec }))
 }
 
 pub async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::Model>, DbErr> {
