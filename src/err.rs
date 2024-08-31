@@ -82,7 +82,7 @@ impl IntoResponse for ServerError {
                         StatusCode::NOT_FOUND,
                         Json(AppRes::fail_with_msg(err.to_string())),
                     ),
-                    GroupErr::UserNotInGroup(_, _) => (
+                    GroupErr::UserNotInGroup { .. } => (
                         StatusCode::NOT_FOUND,
                         Json(AppRes::fail_with_msg(err.to_string())),
                     ),

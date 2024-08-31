@@ -31,10 +31,10 @@ use crate::{message, read_index, user, AppRes, Res};
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        all,create,add
+        all, create, add
     ),
     components(
-        schemas(GroupRes,CreateReq)
+        schemas(GroupRes, CreateReq)
     ),
     tags(
         (name = "group", description = "Group API")
@@ -50,6 +50,7 @@ impl GroupApi {
             .route("/:gid/:uid", put(add).delete(remove))
             .route("/:gid", delete(delete_group).get(detail))
             .route("/:gid/send", put(send))
+            .route("/:gid/history", put(history))
             .route("/:gid/admin/:uid", patch(admin))
             .route("/:gid/forbid/:uid", put(forbid).delete(un_forbid))
             .with_state(app_state)
@@ -62,8 +63,8 @@ pub enum GroupErr {
     #[error("群（ID={0}）不存在存在")]
     GroupNotExist(i32),
     /// User not exist in group
-    #[error("用户（ID={0}）不在群（ID={1}）内")]
-    UserNotInGroup(i32, i32),
+    #[error("用户（ID={uid}）不在群（ID={gid}）内")]
+    UserNotInGroup { uid: i32, gid: i32 },
     /// 通用异常
     #[error("{0}")]
     CommonErr(String),
@@ -200,7 +201,7 @@ async fn add(State(app_state): State<AppState>, Path(req): Path<AddReq>, _: Toke
     if !user::exist(req.uid, &app_state).await? {
         return Err(ServerError::from(UserErr::UserNotExist(req.uid)));
     }
-    if is_in_group(req.gid, req.uid, &app_state).await? {
+    if check_status(req.gid, req.uid, &app_state).await?.in_group {
         return Ok(AppRes::success_with_msg(
             "用户已在群内，无需再次添加".to_string(),
         ));
@@ -229,13 +230,21 @@ async fn exist(p0: i32, app_state: &AppState) -> Result<bool, DbErr> {
         .map(|t| t.is_some())
 }
 
-async fn is_in_group(gid: i32, uid: i32, app_state: &AppState) -> Result<bool, DbErr> {
+struct CheckStatus {
+    in_group: bool,
+    forbid: bool,
+}
+
+async fn check_status(gid: i32, uid: i32, app_state: &AppState) -> Result<CheckStatus, DbErr> {
     UserGroupRel::find()
         .filter(user_group_rel::Column::GroupId.eq(gid))
         .filter(user_group_rel::Column::UserId.eq(uid))
         .one(&app_state.db)
         .await
-        .map(|t| t.is_some())
+        .map(|t| CheckStatus {
+            in_group: t.is_some(),
+            forbid: t.map(|x| x.forbid).unwrap_or(true),
+        })
 }
 
 async fn remove(
@@ -249,10 +258,11 @@ async fn remove(
     if !user::exist(req.uid, &app_state).await? {
         return Err(ServerError::from(UserErr::UserNotExist(req.uid)));
     }
-    if !is_in_group(req.gid, req.uid, &app_state).await? {
-        return Err(ServerError::from(GroupErr::UserNotInGroup(
-            req.uid, req.gid,
-        )));
+    if !check_status(req.gid, req.uid, &app_state).await?.in_group {
+        return Err(ServerError::from(GroupErr::UserNotInGroup {
+            uid: req.uid,
+            gid: req.gid,
+        }));
     }
     UserGroupRel::delete_many()
         .filter(user_group_rel::Column::GroupId.eq(req.gid))
@@ -313,7 +323,10 @@ async fn detail(
             let uids: Vec<i32> = rels.iter().map(|x| x.user_id).collect();
             // if !rels.iter().any(|x| x.user_id == token.id) {
             if !uids.contains(&token.id) {
-                return Err(ServerError::from(GroupErr::UserNotInGroup(token.id, gid)));
+                return Err(ServerError::from(GroupErr::UserNotInGroup {
+                    uid: token.id,
+                    gid,
+                }));
             }
             let uid_2_forbid: HashMap<i32, bool> =
                 rels.iter().map(|x| (x.user_id, x.forbid)).collect();
@@ -365,7 +378,10 @@ async fn admin(
             }
             let uids = get_uids(&app_state, gid).await?;
             if !uids.contains(&uid) {
-                return Err(ServerError::from(GroupErr::UserNotInGroup(token.id, gid)));
+                return Err(ServerError::from(GroupErr::UserNotInGroup {
+                    uid: token.id,
+                    gid,
+                }));
             }
             let mut group = group.into_active_model();
             group.admin = Set(uid);
@@ -394,7 +410,10 @@ async fn forbid(
                 .one(&app_state.db)
                 .await?
             {
-                None => Err(ServerError::from(GroupErr::UserNotInGroup(token.id, gid))),
+                None => Err(ServerError::from(GroupErr::UserNotInGroup {
+                    uid: token.id,
+                    gid,
+                })),
                 Some(ugr) => {
                     if ugr.forbid == true {
                         return Ok(AppRes::success_with_msg(
@@ -430,7 +449,10 @@ async fn un_forbid(
                 .one(&app_state.db)
                 .await?
             {
-                None => Err(ServerError::from(GroupErr::UserNotInGroup(token.id, gid))),
+                None => Err(ServerError::from(GroupErr::UserNotInGroup {
+                    uid: token.id,
+                    gid,
+                })),
                 Some(ugr) => {
                     if ugr.forbid == false {
                         return Ok(AppRes::success_with_msg(
@@ -461,6 +483,18 @@ async fn send(
     token: Token,
     ValidatedJson(msg): ValidatedJson<SendMsgReq>,
 ) -> Res<i64> {
+    let x = check_status(gid, token.id, &app_state).await?;
+    if !x.in_group {
+        return Err(ServerError::from(GroupErr::UserNotInGroup {
+            uid: token.id,
+            gid,
+        }));
+    };
+    if x.forbid {
+        return Err(ServerError::from(GroupErr::CommonErr(
+            "您已被禁言，无权发言".to_string(),
+        )));
+    }
     let payload = msg.build_payload(token.id, MessageTarget::Group(MessageTargetGroup { gid }));
     let mid = message::send_msg(payload, &app_state).await?;
     // 设置read_index
@@ -473,7 +507,7 @@ async fn send(
             uid_of_msg: token.id,
         },
     )
-        .await?;
+    .await?;
     Ok(AppRes::success(mid))
 }
 
@@ -482,4 +516,8 @@ pub(crate) async fn get_by_gids(gids: Vec<i32>, app_state: &AppState) -> Result<
         .filter(group::Column::Id.is_in(gids))
         .all(&app_state.db)
         .await
+}
+
+pub(crate) async fn history() -> Res<()> {
+    Ok(AppRes::success(()))
 }
