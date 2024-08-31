@@ -7,9 +7,8 @@ use axum::routing::put;
 use axum::{Json, Router};
 use entity::read_index;
 use sea_orm::ActiveValue::Set;
-use sea_orm::{sea_query, EntityTrait};
+use sea_orm::{sea_query, DbErr, EntityTrait};
 use serde::{Deserialize, Serialize};
-
 
 pub struct ReadIndexApi;
 
@@ -41,7 +40,7 @@ pub(crate) async fn set_read_index(
     uid: i32,
     read_index: UpdateReadIndex,
 ) -> Result<(), ServerError> {
-    match read_index {
+    Ok(match read_index {
         UpdateReadIndex::User {
             uid,
             mid,
@@ -55,7 +54,7 @@ pub(crate) async fn set_read_index(
                 mid: Set(mid),
                 uid_of_msg: Set(uid_of_msg),
             };
-            read_index::Entity::insert(active_model)
+            let result = read_index::Entity::insert(active_model)
                 .on_conflict(
                     sea_query::OnConflict::columns([
                         read_index::Column::Uid,
@@ -65,7 +64,10 @@ pub(crate) async fn set_read_index(
                     .to_owned(),
                 )
                 .exec(&app_state.db)
-                .await?;
+                .await;
+            if let Err(DbErr::RecordNotInserted) = result {
+                // do nothing
+            }
         }
         UpdateReadIndex::Group {
             gid,
@@ -80,18 +82,20 @@ pub(crate) async fn set_read_index(
                 mid: Set(mid),
                 uid_of_msg: Set(uid_of_msg),
             };
-            read_index::Entity::insert(active_model)
+            let result = read_index::Entity::insert(active_model)
                 .on_conflict(
                     sea_query::OnConflict::columns([
                         read_index::Column::Uid,
                         read_index::Column::TargetGid,
                     ])
-                    .update_column(read_index::Column::Mid)
-                    .to_owned(),
+                        .update_column(read_index::Column::Mid)
+                        .to_owned(),
                 )
                 .exec(&app_state.db)
-                .await?;
+                .await;
+            if let Err(DbErr::RecordNotInserted) = result {
+                // do nothing
+            }
         }
-    }
-    Ok(())
+    })
 }
