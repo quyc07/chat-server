@@ -206,11 +206,20 @@ async fn send(
     Ok(AppRes::success(mid))
 }
 
+#[derive(Serialize)]
+struct UserHistoryMsg {
+    mid: i64,
+    msg: String,
+    #[serde(with = "datetime_format")]
+    time: DateTime<Local>,
+    from_uid: i32,
+}
+
 async fn user_history(
     State(app_state): State<AppState>,
     Path(uid): Path<i32>,
     token: Token,
-) -> Res<Vec<ChatMessage>> {
+) -> Res<Vec<UserHistoryMsg>> {
     if !friend::is_friend(token.dgraph_uid, uid).await {
         return Err(ServerError::from(friend::FriendErr::NotFriend(uid)));
     }
@@ -225,8 +234,18 @@ async fn user_history(
             },
         }),
     );
-    history_msg.sort_by(|m1, m2| m2.payload.created_at.cmp(&m1.payload.created_at));
-    Ok(AppRes::success(history_msg))
+    Ok(AppRes::success(
+        history_msg
+            .into_iter()
+            .map(|x| UserHistoryMsg {
+                mid: x.mid,
+                msg: x.payload.detail.get_content(),
+                time: x.payload.created_at,
+                from_uid: x.payload.from_uid,
+            })
+            .sorted_by(|x1, x2| x2.time.cmp(&x1.time))
+            .collect(),
+    ))
 }
 
 #[derive(Hash, Clone, PartialEq, Eq)]

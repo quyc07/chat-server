@@ -183,8 +183,7 @@ async fn renew(token: Token) -> Res<String> {
     Ok(AppRes::success(access_token))
 }
 
-const SECOND_TO_EXPIRED: u64 = 60 * 5;
-
+const SECOND_TO_EXPIRED: u64 = 10;
 fn expire_timestamp() -> i64 {
     Local::now()
         .add(Duration::from_secs(SECOND_TO_EXPIRED))
