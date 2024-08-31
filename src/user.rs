@@ -214,7 +214,7 @@ async fn user_history(
     if !friend::is_friend(token.dgraph_uid, uid).await {
         return Err(ServerError::from(friend::FriendErr::NotFriend(uid)));
     }
-    Ok(AppRes::success(message::get_history_msg(
+    let mut history_msg = message::get_history_msg(
         &app_state,
         HistoryMsgReq::User(HistoryMsgUser {
             from_id: token.id,
@@ -224,7 +224,9 @@ async fn user_history(
                 limit: 1000,
             },
         }),
-    )))
+    );
+    history_msg.sort_by(|m1, m2| m2.payload.created_at.cmp(&m1.payload.created_at));
+    Ok(AppRes::success(history_msg))
 }
 
 #[derive(Hash, Clone, PartialEq, Eq)]

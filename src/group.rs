@@ -22,7 +22,10 @@ use entity::{group, user_group_rel};
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::err::{ErrPrint, ServerError};
-use crate::message::{MessageTarget, MessageTargetGroup, SendMsgReq};
+use crate::message::{
+    ChatMessage, HistoryMsgGroup, HistoryMsgReq, HistoryReq, MessageTarget, MessageTargetGroup,
+    SendMsgReq,
+};
 use crate::read_index::UpdateReadIndex;
 use crate::user::UserErr;
 use crate::validate::ValidatedJson;
@@ -50,7 +53,7 @@ impl GroupApi {
             .route("/:gid/:uid", put(add).delete(remove))
             .route("/:gid", delete(delete_group).get(detail))
             .route("/:gid/send", put(send))
-            .route("/:gid/history", put(history))
+            .route("/:gid/history", get(history))
             .route("/:gid/admin/:uid", patch(admin))
             .route("/:gid/forbid/:uid", put(forbid).delete(un_forbid))
             .with_state(app_state)
@@ -518,6 +521,27 @@ pub(crate) async fn get_by_gids(gids: Vec<i32>, app_state: &AppState) -> Result<
         .await
 }
 
-pub(crate) async fn history() -> Res<()> {
-    Ok(AppRes::success(()))
+pub(crate) async fn history(
+    State(app_state): State<AppState>,
+    token: Token,
+    Path(gid): Path<i32>,
+) -> Res<Vec<ChatMessage>> {
+    if !check_status(gid, token.id, &app_state).await?.in_group {
+        return Err(ServerError::from(GroupErr::UserNotInGroup {
+            uid: token.id,
+            gid,
+        }));
+    }
+    let mut history_msg = message::get_history_msg(
+        &app_state,
+        HistoryMsgReq::Group(HistoryMsgGroup {
+            gid,
+            history: HistoryReq {
+                before: None,
+                limit: 1000,
+            },
+        }),
+    );
+    history_msg.sort_by(|m1, m2| m2.payload.created_at.cmp(&m1.payload.created_at));
+    Ok(AppRes::success(history_msg))
 }

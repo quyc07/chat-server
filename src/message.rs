@@ -178,8 +178,8 @@ pub struct HistoryMsgUser {
 }
 
 pub struct HistoryMsgGroup {
-    gid: i32,
-    history: HistoryReq,
+    pub(crate) gid: i32,
+    pub(crate) history: HistoryReq,
 }
 
 pub(crate) fn get_history_msg(
