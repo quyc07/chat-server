@@ -33,9 +33,9 @@ pub struct SendMsgReq {
 }
 
 impl SendMsgReq {
-    pub fn build_payload(self, from_id: i32, message_target: MessageTarget) -> ChatMessagePayload {
+    pub fn build_payload(self, from_uid: i32, message_target: MessageTarget) -> ChatMessagePayload {
         ChatMessagePayload {
-            from_uid: from_id,
+            from_uid,
             created_at: Local::now(),
             target: message_target,
             detail: MessageDetail::Normal(MessageNormal {
@@ -126,7 +126,7 @@ impl ChatMessage {
 
 pub(crate) async fn send_msg(
     payload: ChatMessagePayload,
-    app_state: AppState,
+    app_state: &AppState,
 ) -> Result<i64, ServerError> {
     let from_uid = payload.from_uid;
     let msg = serde_json::to_vec(&payload)

@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::option::Option;
 
 use axum::extract::{Path, State};
-use axum::routing::{get, patch, post, put};
-use axum::{Json, Router};
+use axum::routing::{get, patch, post};
+use axum::Router;
 use chrono::{DateTime, Local};
 use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{
-    sea_query, ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, IntoActiveModel,
-    QueryFilter, QuerySelect,
+    ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter,
+    QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -27,11 +27,12 @@ use crate::message::{
     ChatMessage, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget, MessageTargetUser,
     SendMsgReq,
 };
+use crate::read_index;
+use crate::read_index::UpdateReadIndex;
 use crate::validate::ValidatedJson;
 use crate::{auth, datetime, friend, group, message, AppRes, Res};
 use entity::prelude::User;
-use entity::read_index::Model;
-use entity::{read_index, user};
+use entity::user;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -56,7 +57,6 @@ impl UserApi {
             .route("/:uid/history", get(user_history))
             .route("/history/:limit", get(history))
             .route("/password", patch(password))
-            .route("/read-index", put(set_read_index))
             .with_state(app_state)
     }
 }
@@ -191,7 +191,18 @@ async fn send(
         return Err(ServerError::from(friend::FriendErr::NotFriend(uid)));
     }
     let payload = msg.build_payload(token.id, MessageTarget::User(MessageTargetUser { uid }));
-    let mid = message::send_msg(payload, app_state).await?;
+    let mid = message::send_msg(payload, &app_state).await?;
+    // 设置read_index
+    read_index::set_read_index(
+        &app_state,
+        token.id,
+        UpdateReadIndex::User {
+            uid,
+            mid,
+            uid_of_msg: token.id,
+        },
+    )
+    .await?;
     Ok(AppRes::success(mid))
 }
 
@@ -263,8 +274,8 @@ async fn history(
     Path(limit): Path<u64>,
     token: Token,
 ) -> Res<ChatList> {
-    let ris = read_index::Entity::find()
-        .filter(read_index::Column::Uid.eq(token.id))
+    let ris = entity::read_index::Entity::find()
+        .filter(entity::read_index::Column::Uid.eq(token.id))
         .limit(limit)
         .all(&app_state.db)
         .await?;
@@ -281,10 +292,12 @@ async fn history(
         .map(|(target, x)| {
             (
                 target,
-                x.into_iter().map(|(_, g)| g).collect::<Vec<Model>>(),
+                x.into_iter()
+                    .map(|(_, g)| g)
+                    .collect::<Vec<entity::read_index::Model>>(),
             )
         })
-        .collect::<HashMap<ChatTarget, Vec<Model>>>();
+        .collect::<HashMap<ChatTarget, Vec<entity::read_index::Model>>>();
 
     let chat_of_user = match map.get(&ChatTarget::User) {
         Some(ri_of_users) => {
@@ -436,70 +449,4 @@ async fn password(
             Ok(AppRes::success(()))
         }
     }
-}
-
-#[derive(Deserialize, Serialize)]
-enum UpdateReadIndex {
-    User { uid: i32, mid: i64, uid_of_msg: i32 },
-    Group { gid: i32, mid: i64, uid_of_msg: i32 },
-}
-
-async fn set_read_index(
-    State(app_state): State<AppState>,
-    token: Token,
-    Json(read_index): Json<UpdateReadIndex>,
-) -> Res<()> {
-    match read_index {
-        UpdateReadIndex::User {
-            uid,
-            mid,
-            uid_of_msg,
-        } => {
-            let active_model = read_index::ActiveModel {
-                id: Set(Default::default()),
-                uid: Set(token.id),
-                target_uid: Set(Some(uid)),
-                target_gid: Default::default(),
-                mid: Set(mid),
-                uid_of_msg: Set(uid_of_msg),
-            };
-            read_index::Entity::insert(active_model)
-                .on_conflict(
-                    sea_query::OnConflict::columns([
-                        read_index::Column::Uid,
-                        read_index::Column::TargetUid,
-                    ])
-                    .update_column(read_index::Column::Mid)
-                    .to_owned(),
-                )
-                .exec(&app_state.db)
-                .await?;
-        }
-        UpdateReadIndex::Group {
-            gid,
-            mid,
-            uid_of_msg,
-        } => {
-            let active_model = read_index::ActiveModel {
-                id: Set(Default::default()),
-                uid: Set(token.id),
-                target_uid: Default::default(),
-                target_gid: Set(Some(gid)),
-                mid: Set(mid),
-                uid_of_msg: Set(uid_of_msg),
-            };
-            read_index::Entity::insert(active_model)
-                .on_conflict(
-                    sea_query::OnConflict::columns([
-                        read_index::Column::Uid,
-                        read_index::Column::TargetGid,
-                    ])
-                    .update_column(read_index::Column::Mid)
-                    .to_owned(),
-                )
-                .exec(&app_state.db)
-                .await?;
-        }
-    }
-    Ok(AppRes::success(()))
 }

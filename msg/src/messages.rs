@@ -11,6 +11,7 @@ impl<'a> Messages<'a> {
         Ok(self.db.db.get(key_msg(mid))?.map(|data| data.to_vec()))
     }
 
+    /// 发消息到群组
     pub fn send_to_group(
         &self,
         gid: i64,
@@ -28,6 +29,7 @@ impl<'a> Messages<'a> {
         Ok(id)
     }
 
+    /// 发消息到用户
     pub fn send_to_dm(&self, from_uid: i64, to_uid: i64, msg: &[u8]) -> Result<i64> {
         let id = self.db.generate_msg_id()?;
         let mut batch = Batch::default();
@@ -40,6 +42,7 @@ impl<'a> Messages<'a> {
         Ok(id)
     }
 
+    /// 获取用户的after之后的最近limit条消息（所有消息，包括单聊和群聊消息）
     pub fn fetch_user_messages_after(
         &self,
         uid: i64,
@@ -72,6 +75,7 @@ impl<'a> Messages<'a> {
         Ok(msgs)
     }
 
+    /// 获取单聊消息，before之前的limit条消息
     pub fn fetch_dm_messages_before(
         &self,
         from_uid: i64,
@@ -106,6 +110,7 @@ impl<'a> Messages<'a> {
         Ok(msgs)
     }
 
+    /// 获取群聊消息，before之前的limit条消息
     pub fn fetch_group_messages_before(
         &self,
         gid: i64,
@@ -139,11 +144,13 @@ impl<'a> Messages<'a> {
         Ok(msgs)
     }
 
+    /// 插入消息
     pub fn insert_merged_msg(&self, mid: i64, msg: &[u8]) -> Result<()> {
         self.db.db.insert(key_merged_msg(mid), msg)?;
         Ok(())
     }
 
+    /// 更新消息
     pub fn update_merged_msg(&self, mid: i64, mut f: impl FnMut(&[u8]) -> Vec<u8>) -> Result<()> {
         self.db
             .db
@@ -151,11 +158,13 @@ impl<'a> Messages<'a> {
         Ok(())
     }
 
+    /// 删除消息
     pub fn remove_merged_msg(&self, mid: i64) -> Result<()> {
         self.db.db.remove(key_merged_msg(mid))?;
         Ok(())
     }
 
+    /// 获取消息
     pub fn get_merged_msg(&self, mid: i64) -> Result<Option<Vec<u8>>> {
         Ok(self
             .db

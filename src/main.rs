@@ -15,6 +15,7 @@ use chat_server::friend::FriendApi;
 use chat_server::group::GroupApi;
 use chat_server::log;
 use chat_server::open_api::swagger_ui;
+use chat_server::read_index::ReadIndexApi;
 use chat_server::user::UserApi;
 use migration::{Migrator, MigratorTrait};
 
@@ -35,7 +36,8 @@ async fn main() {
         .nest("/group", GroupApi::route(app_state.clone()))
         .nest("/token", TokenApi::route(app_state.clone()))
         .nest("/event", EventApi::route(app_state.clone()))
-        .nest("/friend", FriendApi::route(app_state.clone()));
+        .nest("/friend", FriendApi::route(app_state.clone()))
+        .nest("/ri", ReadIndexApi::route(app_state.clone()));
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
     info!("chat server started!");

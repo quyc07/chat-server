@@ -23,9 +23,10 @@ use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::err::{ErrPrint, ServerError};
 use crate::message::{MessageTarget, MessageTargetGroup, SendMsgReq};
+use crate::read_index::UpdateReadIndex;
 use crate::user::UserErr;
 use crate::validate::ValidatedJson;
-use crate::{message, user, AppRes, Res};
+use crate::{message, read_index, user, AppRes, Res};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -169,6 +170,7 @@ async fn create(
         u_time: Default::default(),
     };
     let group = group.insert(&app_state.db).await?;
+    add_to_group(&app_state, group.id, token.id).await?;
     Ok(AppRes::success(group.id))
 }
 
@@ -203,15 +205,20 @@ async fn add(State(app_state): State<AppState>, Path(req): Path<AddReq>, _: Toke
             "用户已在群内，无需再次添加".to_string(),
         ));
     }
+    add_to_group(&app_state, req.gid, req.uid).await?;
+    Ok(AppRes::success(()))
+}
+
+async fn add_to_group(app_state: &AppState, gid: i32, uid: i32) -> Result<(), ServerError> {
     let rel = user_group_rel::ActiveModel {
         id: Default::default(),
-        group_id: Set(req.gid),
-        user_id: Set(req.uid),
+        group_id: Set(gid),
+        user_id: Set(uid),
         c_time: Default::default(),
         forbid: Default::default(),
     };
     rel.insert(&app_state.db).await?;
-    Ok(AppRes::success(()))
+    Ok(())
 }
 
 async fn exist(p0: i32, app_state: &AppState) -> Result<bool, DbErr> {
@@ -455,7 +462,18 @@ async fn send(
     ValidatedJson(msg): ValidatedJson<SendMsgReq>,
 ) -> Res<i64> {
     let payload = msg.build_payload(token.id, MessageTarget::Group(MessageTargetGroup { gid }));
-    let mid = message::send_msg(payload, app_state).await?;
+    let mid = message::send_msg(payload, &app_state).await?;
+    // 设置read_index
+    read_index::set_read_index(
+        &app_state,
+        token.id,
+        UpdateReadIndex::Group {
+            gid,
+            mid,
+            uid_of_msg: token.id,
+        },
+    )
+        .await?;
     Ok(AppRes::success(mid))
 }
 

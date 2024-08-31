@@ -1,16 +1,11 @@
-use crate::app_state::AppState;
 use crate::err::{ErrPrint, ServerError};
 use crate::friend::FriendRegister;
-use crate::{AppRes, Res};
-use axum::routing::{get, post};
-use axum::{Json, Router};
 use reqwest::Client;
 use reqwest::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::string::ToString;
-use tracing::info;
 
 const DGRAPH_URL: &str = "http://localhost:8080";
 
