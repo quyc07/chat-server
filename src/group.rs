@@ -1,8 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::datetime::datetime_format;
 use axum::extract::{Path, State};
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
+use chrono::{DateTime, Local};
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use sea_orm::ActiveValue::Set;
 use sea_orm::{
@@ -23,7 +25,7 @@ use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::err::{ErrPrint, ServerError};
 use crate::message::{
-    ChatMessage, HistoryMsgGroup, HistoryMsgReq, HistoryReq, MessageTarget, MessageTargetGroup,
+    HistoryMsgGroup, HistoryMsgReq, HistoryReq, MessageTarget, MessageTargetGroup,
     SendMsgReq,
 };
 use crate::read_index::UpdateReadIndex;
@@ -521,13 +523,21 @@ pub(crate) async fn get_by_gids(gids: Vec<i32>, app_state: &AppState) -> Result<
         .await
 }
 
-
+#[derive(Serialize)]
+struct GroupHistoryMsg {
+    mid: i64,
+    msg: String,
+    #[serde(with = "datetime_format")]
+    time: DateTime<Local>,
+    from_uid: i32,
+    name_of_from_uid: String,
+}
 
 pub(crate) async fn history(
     State(app_state): State<AppState>,
     token: Token,
     Path(gid): Path<i32>,
-) -> Res<Vec<ChatMessage>> {
+) -> Res<Vec<GroupHistoryMsg>> {
     if !check_status(gid, token.id, &app_state).await?.in_group {
         return Err(ServerError::from(GroupErr::UserNotInGroup {
             uid: token.id,
@@ -544,6 +554,29 @@ pub(crate) async fn history(
             },
         }),
     );
-    history_msg.sort_by(|m1, m2| m2.payload.created_at.cmp(&m1.payload.created_at));
-    Ok(AppRes::success(history_msg))
+    // history_msg.sort_by(|m1, m2| m2.payload.created_at.cmp(&m1.payload.created_at));
+    let from_uids = history_msg
+        .iter()
+        .map(|x| x.payload.from_uid)
+        .collect::<Vec<i32>>();
+    let from_uid_2_name = user::get_by_ids(from_uids, &app_state)
+        .await?
+        .iter()
+        .map(|x| (x.id, x.name.clone()))
+        .collect::<HashMap<i32, String>>();
+    Ok(AppRes::success(
+        history_msg
+            .into_iter()
+            .map(|x| GroupHistoryMsg {
+                mid: x.mid,
+                msg: x.payload.detail.get_content(),
+                time: x.payload.created_at,
+                from_uid: x.payload.from_uid,
+                name_of_from_uid: from_uid_2_name
+                    .get(&x.payload.from_uid)
+                    .unwrap_or(&"未知用户".to_string())
+                    .to_string(),
+            })
+            .collect(),
+    ))
 }
