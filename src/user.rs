@@ -40,7 +40,7 @@ use entity::user;
         register
     ),
     components(
-        schemas(UserRegisterReq, UserRes)
+        schemas(UserRegisterReq, UserRegisterRes)
     ),
     tags(
         (name = "user", description = "USER API")
@@ -90,11 +90,11 @@ pub enum UserErr {
 
 impl ErrPrint for UserErr {}
 
-async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<UserRes>> {
+async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<UserRegisterRes>> {
     let result = User::find().all(&app_state.db).await;
     let model = result?;
     Ok(AppRes::success(
-        model.into_iter().map(UserRes::from).collect(),
+        model.into_iter().map(UserRegisterRes::from).collect(),
     ))
 }
 
@@ -106,14 +106,14 @@ async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<UserRes>> {
     path = "/user/register",
     request_body = UserRegisterReq,
     responses(
-        (status = 200, description = "Register User and return the User successfully", body = [UserRes]),
+        (status = 200, description = "Register User and return the User successfully", body = [UserRegisterRes]),
         (status = 409, description = "UserName already exists", body = [ServerError])
     )
 )]
 async fn register(
     State(app_state): State<AppState>,
     ValidatedJson(req): ValidatedJson<UserRegisterReq>,
-) -> Res<UserRes> {
+) -> Res<UserRegisterRes> {
     let name = req.name.as_str();
     if find_by_name(&app_state, name).await?.is_some() {
         return Err(ServerError::from(UserErr::UserNameExist(name.to_string())));
@@ -141,12 +141,12 @@ async fn register(
     let mut user = user.into_active_model();
     user.dgraph_uid = Set(dgraph_uid);
     let user = user.update(&app_state.db).await?;
-    Ok(AppRes::success(UserRes::from(user)))
+    Ok(AppRes::success(UserRegisterRes::from(user)))
 }
 
 /// The new user.
 #[derive(Serialize, Deserialize, ToSchema)]
-struct UserRes {
+struct UserRegisterRes {
     pub id: i32,
     #[schema(example = "User Name")]
     pub name: String,
@@ -161,7 +161,7 @@ struct UserRes {
     pub dgraph_uid: String,
 }
 
-impl From<user::Model> for UserRes {
+impl From<user::Model> for UserRegisterRes {
     fn from(value: user::Model) -> Self {
         Self {
             id: value.id,
