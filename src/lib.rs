@@ -1,26 +1,57 @@
 use std::string::ToString;
 
+use crate::app_state::AppState;
+use crate::err::ServerError;
 use axum::extract::FromRequest;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::Router;
 use serde::Serialize;
-
-use crate::err::ServerError;
 
 pub mod app_state;
 pub mod auth;
+pub mod datetime;
 pub mod err;
 pub mod event;
-pub mod datetime;
+pub mod friend;
 pub mod group;
 pub mod log;
+pub mod message;
+pub mod middleware;
 pub mod open_api;
+pub mod read_index;
 pub mod user;
 pub mod validate;
-pub mod message;
-pub mod friend;
-pub mod read_index;
-pub mod middleware;
+
+pub trait Api {
+    fn route(app_state: AppState) -> CheckRouter;
+}
+
+pub struct CheckRouter {
+    need_login: Option<Router>,
+    not_need_login: Option<Router>,
+    app_state: AppState,
+}
+
+impl CheckRouter {
+    pub fn route(&self) -> Router {
+        let need_login = match self.need_login.clone() {
+            None => None,
+            Some(router) => Some(router.route_layer(axum::middleware::from_fn_with_state(
+                self.app_state.clone(),
+                middleware::check_user_status,
+            ))),
+        };
+        match (need_login, self.not_need_login.clone()) {
+            (Some(need_login_router), Some(not_need_login_router)) => {
+                need_login_router.merge(not_need_login_router)
+            }
+            (Some(need_login_router), None) => need_login_router,
+            (None, Some(not_need_login_router)) => not_need_login_router,
+            (None, None) => panic!("need_login_router and not_need_login_router is None"),
+        }
+    }
+}
 
 // Create our own JSON extractor by wrapping `axum::Json`. This makes it easy to override the
 // rejection and provide our own which formats errors to match our application.

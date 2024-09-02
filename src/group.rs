@@ -25,13 +25,12 @@ use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::err::{ErrPrint, ServerError};
 use crate::message::{
-    HistoryMsgGroup, HistoryMsgReq, HistoryReq, MessageTarget, MessageTargetGroup,
-    SendMsgReq,
+    HistoryMsgGroup, HistoryMsgReq, HistoryReq, MessageTarget, MessageTargetGroup, SendMsgReq,
 };
 use crate::read_index::UpdateReadIndex;
 use crate::user::UserErr;
 use crate::validate::ValidatedJson;
-use crate::{message, read_index, user, AppRes, Res};
+use crate::{message, read_index, user, Api, AppRes, CheckRouter, Res};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -47,9 +46,9 @@ use crate::{message, read_index, user, AppRes, Res};
 )]
 pub struct GroupApi;
 
-impl GroupApi {
-    pub fn route(app_state: AppState) -> Router {
-        Router::new()
+impl Api for GroupApi {
+    fn route(app_state: AppState) -> CheckRouter {
+        let need_login = Router::new()
             .route("/", post(create).get(mine))
             .route("/all", get(all))
             .route("/:gid/:uid", put(add).delete(remove))
@@ -58,7 +57,12 @@ impl GroupApi {
             .route("/:gid/history", get(history))
             .route("/:gid/admin/:uid", patch(admin))
             .route("/:gid/forbid/:uid", put(forbid).delete(un_forbid))
-            .with_state(app_state)
+            .with_state(app_state.clone());
+        CheckRouter {
+            need_login: Some(need_login),
+            not_need_login: None,
+            app_state
+        }
     }
 }
 

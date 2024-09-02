@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::err::ServerError;
-use crate::{AppRes, Res};
+use crate::{Api, AppRes, CheckRouter, Res};
 use axum::extract::State;
 use axum::routing::put;
 use axum::{Json, Router};
@@ -12,11 +12,17 @@ use serde::{Deserialize, Serialize};
 
 pub struct ReadIndexApi;
 
-impl ReadIndexApi {
-    pub fn route(app_state: AppState) -> Router {
-        Router::new()
-            .route("/", put(read_index))
-            .with_state(app_state)
+impl Api for ReadIndexApi {
+    fn route(app_state: AppState) -> CheckRouter {
+        CheckRouter {
+            need_login: Some(
+                Router::new()
+                    .route("/", put(read_index))
+                    .with_state(app_state.clone()),
+            ),
+            not_need_login: None,
+            app_state
+        }
     }
 }
 
@@ -88,8 +94,8 @@ pub(crate) async fn set_read_index(
                         read_index::Column::Uid,
                         read_index::Column::TargetGid,
                     ])
-                        .update_column(read_index::Column::Mid)
-                        .to_owned(),
+                    .update_column(read_index::Column::Mid)
+                    .to_owned(),
                 )
                 .exec(&app_state.db)
                 .await;

@@ -13,10 +13,10 @@ use chat_server::auth::TokenApi;
 use chat_server::event::EventApi;
 use chat_server::friend::FriendApi;
 use chat_server::group::GroupApi;
-use chat_server::log;
 use chat_server::open_api::swagger_ui;
 use chat_server::read_index::ReadIndexApi;
 use chat_server::user::UserApi;
+use chat_server::{log, Api};
 use migration::{Migrator, MigratorTrait};
 
 #[tokio::main]
@@ -32,12 +32,12 @@ async fn main() {
     let app = Router::new()
         .merge(swagger_ui().await)
         .route("/", get(|| async { "Hello, World!" }))
-        .nest("/user", UserApi::route(app_state.clone()))
-        .nest("/group", GroupApi::route(app_state.clone()))
-        .nest("/token", TokenApi::route(app_state.clone()))
-        .nest("/event", EventApi::route(app_state.clone()))
-        .nest("/friend", FriendApi::route(app_state.clone()))
-        .nest("/ri", ReadIndexApi::route(app_state.clone()));
+        .nest("/user", UserApi::route(app_state.clone()).route())
+        .nest("/group", GroupApi::route(app_state.clone()).route())
+        .nest("/token", TokenApi::route(app_state.clone()).route())
+        .nest("/event", EventApi::route(app_state.clone()).route())
+        .nest("/friend", FriendApi::route(app_state.clone()).route())
+        .nest("/ri", ReadIndexApi::route(app_state.clone()).route());
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
     info!("chat server started!");

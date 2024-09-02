@@ -27,10 +27,10 @@ use crate::message::{
     ChatMessage, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget, MessageTargetUser,
     SendMsgReq,
 };
-use crate::read_index;
 use crate::read_index::UpdateReadIndex;
 use crate::validate::ValidatedJson;
 use crate::{auth, datetime, friend, group, message, AppRes, Res};
+use crate::{read_index, Api, CheckRouter};
 use entity::prelude::User;
 use entity::sea_orm_active_enums::UserStatus;
 use entity::user;
@@ -49,9 +49,9 @@ use entity::user;
 )]
 pub struct UserApi;
 
-impl UserApi {
-    pub fn route(app_state: AppState) -> Router {
-        Router::new()
+impl Api for UserApi {
+    fn route(app_state: AppState) -> CheckRouter {
+        let need_login = Router::new()
             .route("/all", get(all))
             .route("/:uid/send", post(send))
             .route("/:uid/history", get(user_history))
@@ -61,8 +61,15 @@ impl UserApi {
                 app_state.clone(),
                 crate::middleware::check_user_status,
             ))
+            .with_state(app_state.clone());
+        let not_need_login = Router::new()
             .route("/register", post(register))
-            .with_state(app_state)
+            .with_state(app_state.clone());
+        CheckRouter {
+            need_login: Some(need_login),
+            not_need_login: Some(not_need_login),
+            app_state,
+        }
     }
 }
 
@@ -481,7 +488,7 @@ pub(crate) async fn check_status(uid: i32, app_state: &AppState) -> Result<(), S
     match User::find_by_id(uid).one(&app_state.db).await? {
         None => Err(ServerError::from(UserErr::UserNotExist(uid))),
         Some(user) => {
-            if user.status == UserStatus::Normal {
+            if user.status == UserStatus::Freeze {
                 Err(ServerError::from(UserErr::UserWasFreeze(uid)))
             } else {
                 Ok(())

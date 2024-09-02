@@ -5,11 +5,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::app_state::AppState;
+use crate::auth::Token;
+use crate::message::ChatMessage;
+use crate::{Api, CheckRouter};
 use axum::extract::State;
-use axum::response::Sse;
 use axum::response::sse::Event;
-use axum::Router;
+use axum::response::Sse;
 use axum::routing::get;
+use axum::Router;
 use axum_extra::{headers, TypedHeader};
 use chrono::{DateTime, Local};
 use futures::Stream;
@@ -20,21 +24,22 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
 use tower_http::services::ServeDir;
 
-use crate::app_state::AppState;
-use crate::auth::Token;
-use crate::message::ChatMessage;
-
 pub struct EventApi;
 
-impl EventApi {
-    pub fn route(app_state: AppState) -> Router {
+impl Api for EventApi {
+    fn route(app_state: AppState) -> CheckRouter {
         let assets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
         let static_files_service = ServeDir::new(assets_dir).append_index_html_on_directories(true);
         // build our application with a route
-        Router::new()
+        let need_login = Router::new()
             .fallback_service(static_files_service)
             .route("/stream", get(event_handler))
-            .with_state(app_state)
+            .with_state(app_state.clone());
+        CheckRouter {
+            need_login: Some(need_login),
+            not_need_login: None,
+            app_state,
+        }
     }
 }
 

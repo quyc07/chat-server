@@ -4,7 +4,7 @@ use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::datetime::datetime_format;
 use crate::err::{ErrPrint, ServerError};
-use crate::{datetime, user, AppRes, Res};
+use crate::{datetime, user, Api, AppRes, CheckRouter, Res};
 use axum::extract::{Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -21,13 +21,19 @@ use utoipa::ToSchema;
 
 pub struct FriendApi;
 
-impl FriendApi {
-    pub fn route(app_state: AppState) -> Router {
-        Router::new()
-            .route("/", get(list))
-            .route("/req/:uid", post(request))
-            .route("/req", get(req_list).post(review))
-            .with_state(app_state)
+impl Api for FriendApi {
+    fn route(app_state: AppState) -> CheckRouter {
+        CheckRouter {
+            need_login: Some(
+                Router::new()
+                    .route("/", get(list))
+                    .route("/req/:uid", post(request))
+                    .route("/req", get(req_list).post(review))
+                    .with_state(app_state.clone()),
+            ),
+            not_need_login: None,
+            app_state
+        }
     }
 }
 
@@ -182,7 +188,7 @@ struct Friend {
 }
 
 /// 好友列表
-async fn list( token: Token) -> Res<Vec<Friend>> {
+async fn list(token: Token) -> Res<Vec<Friend>> {
     match dgraph::get_friends(token.dgraph_uid.as_str()).await? {
         None => Ok(AppRes::success(vec![])),
         Some(res) => match res.friend {

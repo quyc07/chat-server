@@ -24,7 +24,7 @@ use validator::Validate;
 use crate::app_state::AppState;
 use crate::err::{ErrPrint, ServerError};
 use crate::validate::ValidatedJson;
-use crate::{user, AppRes, Res};
+use crate::{user, Api, AppRes, CheckRouter, Res};
 
 const KEYS: LazyLock<Keys, fn() -> Keys> = LazyLock::new(|| {
     let secret = std::env::var("JWT_SECRET").unwrap_or("abc".to_string());
@@ -122,13 +122,19 @@ impl From<AuthError> for String {
 
 pub struct TokenApi;
 
-impl TokenApi {
-    pub fn route(app_state: AppState) -> Router {
-        Router::new()
-            .route("/renew", post(renew))
+impl Api for TokenApi {
+    fn route(app_state: AppState) -> CheckRouter {
+        let not_need_login = Router::new()
             .route("/login", post(login))
             .route("/logout", delete(logout))
-            .with_state(app_state)
+            .with_state(app_state.clone());
+
+        let need_login = Router::new().route("/renew", post(renew));
+        CheckRouter {
+            need_login: Some(need_login),
+            not_need_login: Some(not_need_login),
+            app_state,
+        }
     }
 }
 
