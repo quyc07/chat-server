@@ -360,17 +360,11 @@ async fn history(
     let chat_of_group = match map.get(&ChatTarget::Group) {
         None => vec![],
         Some(ris_of_group) => {
-            let (uids, mids) = ris_of_group
+            let (gid_uid, mids) = ris_of_group
                 .iter()
                 .map(|x| ((x.target_gid.unwrap(), x.uid_of_msg), x.mid))
                 .collect::<(Vec<(i32, i32)>, Vec<i64>)>();
-            let gids = ris_of_group
-                .iter()
-                .map(|x| x.target_gid.unwrap())
-                .collect::<Vec<i32>>();
-            let uids = uids.into_iter().fold(vec![], |mut x, (u1, u2)| {
-                x.into_iter().chain(vec![u1, u2]).collect()
-            });
+            let (gids, uids) = gid_uid.into_iter().collect::<(Vec<i32>, Vec<i32>)>();
             let uid_2_name = get_by_ids(uids, &app_state)
                 .await?
                 .into_iter()

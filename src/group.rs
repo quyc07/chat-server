@@ -554,7 +554,7 @@ pub(crate) async fn history(
             },
         }),
     );
-    // history_msg.sort_by(|m1, m2| m2.payload.created_at.cmp(&m1.payload.created_at));
+    history_msg.sort_by(|m1, m2| m2.payload.created_at.cmp(&m1.payload.created_at));
     let from_uids = history_msg
         .iter()
         .map(|x| x.payload.from_uid)
