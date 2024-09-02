@@ -73,6 +73,10 @@ impl IntoResponse for ServerError {
                         StatusCode::NOT_FOUND,
                         Json(AppRes::fail_with_msg(err.to_string())),
                     ),
+                    UserErr::UserWasFreeze(_) => (
+                        StatusCode::UNAUTHORIZED,
+                        Json(AppRes::fail_with_msg(err.to_string())),
+                    ),
                 }
             }
             ServerError::GroupErr(err) => {

@@ -11,7 +11,7 @@ use axum::{Json, Router};
 use chrono::{DateTime, Local};
 use entity::friend_request;
 use entity::prelude::FriendRequest;
-use entity::sea_orm_active_enums::{FriendRequestStatus, UserStatus};
+use entity::sea_orm_active_enums::FriendRequestStatus;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter};
 use serde::{Deserialize, Serialize};
@@ -179,35 +179,23 @@ async fn review(
 struct Friend {
     id: i32,
     name: String,
-    status: UserStatus,
 }
 
-async fn list(State(app_state): State<AppState>, token: Token) -> Res<Vec<Friend>> {
+/// 好友列表
+async fn list( token: Token) -> Res<Vec<Friend>> {
     match dgraph::get_friends(token.dgraph_uid.as_str()).await? {
         None => Ok(AppRes::success(vec![])),
         Some(res) => match res.friend {
             None => Ok(AppRes::success(vec![])),
-            Some(friends) => {
-                let id_2_status =
-                    user::get_by_ids(friends.iter().map(|f| f.user_id).collect(), &app_state)
-                        .await?
-                        .iter()
-                        .map(|user| (user.id, user.status.clone()))
-                        .collect::<HashMap<i32, UserStatus>>();
-                Ok(AppRes::success(
-                    friends
-                        .iter()
-                        .map(|friend| Friend {
-                            id: friend.user_id,
-                            name: friend.name.clone(),
-                            status: id_2_status
-                                .get(&friend.user_id)
-                                .unwrap_or(&UserStatus::Freeze)
-                                .clone(),
-                        })
-                        .collect(),
-                ))
-            }
+            Some(friends) => Ok(AppRes::success(
+                friends
+                    .iter()
+                    .map(|friend| Friend {
+                        id: friend.user_id,
+                        name: friend.name.clone(),
+                    })
+                    .collect(),
+            )),
         },
     }
 }
@@ -223,5 +211,7 @@ pub(crate) async fn register(fr: FriendRegister) -> Result<String, ServerError> 
 }
 
 pub(crate) async fn is_friend(object_graph_id: String, user_id: i32) -> bool {
-    dgraph::is_friend(object_graph_id, user_id).await.unwrap_or(false)
+    dgraph::is_friend(object_graph_id, user_id)
+        .await
+        .unwrap_or(false)
 }

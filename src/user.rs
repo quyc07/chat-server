@@ -3,7 +3,7 @@ use std::option::Option;
 
 use axum::extract::{Path, State};
 use axum::routing::{get, patch, post};
-use axum::Router;
+use axum::{middleware, Router};
 use chrono::{DateTime, Local};
 use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
@@ -32,6 +32,7 @@ use crate::read_index::UpdateReadIndex;
 use crate::validate::ValidatedJson;
 use crate::{auth, datetime, friend, group, message, AppRes, Res};
 use entity::prelude::User;
+use entity::sea_orm_active_enums::UserStatus;
 use entity::user;
 
 #[derive(OpenApi)]
@@ -51,12 +52,16 @@ pub struct UserApi;
 impl UserApi {
     pub fn route(app_state: AppState) -> Router {
         Router::new()
-            .route("/register", post(register))
             .route("/all", get(all))
             .route("/:uid/send", post(send))
             .route("/:uid/history", get(user_history))
             .route("/history/:limit", get(history))
             .route("/password", patch(password))
+            .route_layer(middleware::from_fn_with_state(
+                app_state.clone(),
+                crate::middleware::check_user_status,
+            ))
+            .route("/register", post(register))
             .with_state(app_state)
     }
 }
@@ -86,6 +91,9 @@ pub enum UserErr {
     /// User not exist
     #[error("用户{0}不存在")]
     UserNotExist(i32),
+    /// User was Freeze
+    #[error("用户{0}状态异常")]
+    UserWasFreeze(i32),
 }
 
 impl ErrPrint for UserErr {}
@@ -190,6 +198,8 @@ async fn send(
     if !friend::is_friend(token.dgraph_uid, uid).await {
         return Err(ServerError::from(friend::FriendErr::NotFriend(uid)));
     }
+    // 判断目标用户是否冻结
+    check_status(uid, &app_state).await?;
     let payload = msg.build_payload(token.id, MessageTarget::User(MessageTargetUser { uid }));
     let mid = message::send_msg(payload, &app_state).await?;
     // 设置read_index
@@ -462,6 +472,20 @@ async fn password(
             // 删除登陆状态
             auth::delete_login_status(token.id).await;
             Ok(AppRes::success(()))
+        }
+    }
+}
+
+// 判断用户状态是否是冻结状态，如果是冻结状态，则抛出用户状态异常的error
+pub(crate) async fn check_status(uid: i32, app_state: &AppState) -> Result<(), ServerError> {
+    match User::find_by_id(uid).one(&app_state.db).await? {
+        None => Err(ServerError::from(UserErr::UserNotExist(uid))),
+        Some(user) => {
+            if user.status == UserStatus::Normal {
+                Err(ServerError::from(UserErr::UserWasFreeze(uid)))
+            } else {
+                Ok(())
+            }
         }
     }
 }
