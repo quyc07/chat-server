@@ -5,6 +5,7 @@ use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
+// TODO token 校验和状态检查，应该拆成两个中间件
 pub(crate) async fn check_user_status(
     State(state): State<AppState>,
     token: Token,
