@@ -32,12 +32,12 @@ async fn main() {
     let app = Router::new()
         .merge(swagger_ui().await)
         .route("/", get(|| async { "Hello, World!" }))
-        .nest("/user", UserApi::route(app_state.clone()).route())
-        .nest("/group", GroupApi::route(app_state.clone()).route())
-        .nest("/token", TokenApi::route(app_state.clone()).route())
-        .nest("/event", EventApi::route(app_state.clone()).route())
-        .nest("/friend", FriendApi::route(app_state.clone()).route())
-        .nest("/ri", ReadIndexApi::route(app_state.clone()).route());
+        .nest("/user", UserApi::route(app_state.clone()))
+        .nest("/group", GroupApi::route(app_state.clone()))
+        .nest("/token", TokenApi::route(app_state.clone()))
+        .nest("/event", EventApi::route(app_state.clone()))
+        .nest("/friend", FriendApi::route(app_state.clone()))
+        .nest("/ri", ReadIndexApi::route(app_state.clone()));
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
     info!("chat server started!");

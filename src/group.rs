@@ -30,7 +30,9 @@ use crate::message::{
 use crate::read_index::UpdateReadIndex;
 use crate::user::UserErr;
 use crate::validate::ValidatedJson;
-use crate::{message, read_index, user, Api, AppRes, CheckRouter, Res};
+use crate::{
+    message, middleware, read_index, user, Api, AppRes, Res,
+};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -47,22 +49,27 @@ use crate::{message, read_index, user, Api, AppRes, CheckRouter, Res};
 pub struct GroupApi;
 
 impl Api for GroupApi {
-    fn route(app_state: AppState) -> CheckRouter {
-        let need_login = Router::new()
-            .route("/", post(create).get(mine))
-            .route("/all", get(all))
+    fn route(app_state: AppState) -> Router {
+        Router::new()
+            .route("/", post(create))
             .route("/:gid/:uid", put(add).delete(remove))
-            .route("/:gid", delete(delete_group).get(detail))
+            .route("/:gid", delete(delete_group))
             .route("/:gid/send", put(send))
-            .route("/:gid/history", get(history))
             .route("/:gid/admin/:uid", patch(admin))
             .route("/:gid/forbid/:uid", put(forbid).delete(un_forbid))
-            .with_state(app_state.clone());
-        CheckRouter {
-            need_login: Some(need_login),
-            not_need_login: None,
-            app_state
-        }
+            .route_layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                middleware::check_user_status,
+            ))
+            .route("/:gid", get(detail))
+            .route("/", get(mine))
+            .route("/all", get(all))
+            .route("/:gid/history", get(history))
+            .route_layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                middleware::check_login,
+            ))
+            .with_state(app_state.clone())
     }
 }
 

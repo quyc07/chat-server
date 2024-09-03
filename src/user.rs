@@ -3,7 +3,7 @@ use std::option::Option;
 
 use axum::extract::{Path, State};
 use axum::routing::{get, patch, post};
-use axum::{middleware, Router};
+use axum::Router;
 use chrono::{DateTime, Local};
 use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
@@ -29,8 +29,8 @@ use crate::message::{
 };
 use crate::read_index::UpdateReadIndex;
 use crate::validate::ValidatedJson;
-use crate::{auth, datetime, friend, group, message, AppRes, Res};
-use crate::{read_index, Api, CheckRouter};
+use crate::{auth, datetime, friend, group, message, middleware, AppRes, Res};
+use crate::{read_index, Api};
 use entity::prelude::User;
 use entity::sea_orm_active_enums::UserStatus;
 use entity::user;
@@ -50,26 +50,23 @@ use entity::user;
 pub struct UserApi;
 
 impl Api for UserApi {
-    fn route(app_state: AppState) -> CheckRouter {
-        let need_login = Router::new()
-            .route("/all", get(all))
+    fn route(app_state: AppState) -> Router {
+        Router::new()
             .route("/:uid/send", post(send))
+            .route("/password", patch(password))
+            .route_layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                middleware::check_user_status,
+            ))
+            .route("/all", get(all))
             .route("/:uid/history", get(user_history))
             .route("/history/:limit", get(history))
-            .route("/password", patch(password))
-            .route_layer(middleware::from_fn_with_state(
+            .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
-                crate::middleware::check_user_status,
+                middleware::check_login,
             ))
-            .with_state(app_state.clone());
-        let not_need_login = Router::new()
             .route("/register", post(register))
-            .with_state(app_state.clone());
-        CheckRouter {
-            need_login: Some(need_login),
-            not_need_login: Some(not_need_login),
-            app_state,
-        }
+            .with_state(app_state.clone())
     }
 }
 
@@ -488,7 +485,7 @@ pub(crate) async fn check_status(uid: i32, app_state: &AppState) -> Result<(), S
     match User::find_by_id(uid).one(&app_state.db).await? {
         None => Err(ServerError::from(UserErr::UserNotExist(uid))),
         Some(user) => {
-            if user.status == UserStatus::Freeze {
+            if user.status == UserStatus::Normal {
                 Err(ServerError::from(UserErr::UserWasFreeze(uid)))
             } else {
                 Ok(())

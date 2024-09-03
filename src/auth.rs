@@ -24,7 +24,7 @@ use validator::Validate;
 use crate::app_state::AppState;
 use crate::err::{ErrPrint, ServerError};
 use crate::validate::ValidatedJson;
-use crate::{user, Api, AppRes, CheckRouter, Res};
+use crate::{middleware, user, Api, AppRes, Res};
 
 const KEYS: LazyLock<Keys, fn() -> Keys> = LazyLock::new(|| {
     let secret = std::env::var("JWT_SECRET").unwrap_or("abc".to_string());
@@ -76,25 +76,13 @@ where
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         match parts.extract::<TypedHeader<Authorization<Bearer>>>().await {
-            Ok(TypedHeader(Authorization(bearer))) => {
-                let token_data = parse_token(bearer.token()).await?;
-                // 判断是否是已登陆用户，LOGIN_USER的内存过期时间与token的expire时间一致，因此只需判断是否存在即可
-                match LOGIN_USER.get(&token_data.claims.id).await {
-                    None => Err(ServerError::from(AuthError::InvalidToken)),
-                    Some(_) => Ok(token_data.claims),
-                }
-            }
+            Ok(TypedHeader(Authorization(bearer))) => Ok(parse_token(bearer.token()).await?.claims),
             Err(_) => {
                 let query = parts.uri.query().unwrap_or_default();
                 let value: HashMap<String, String> =
                     serde_html_form::from_str(query).map_err(|_| AuthError::InvalidToken)?;
                 let token = value.get("token").ok_or(AuthError::InvalidToken)?.as_str();
-                let token_data = parse_token(token).await?;
-                // 判断是否是已登陆用户，LOGIN_USER的内存过期时间与token的expire时间一致，因此只需判断是否存在即可
-                match LOGIN_USER.get(&token_data.claims.id).await {
-                    None => Err(ServerError::from(AuthError::InvalidToken)),
-                    Some(_) => Ok(token_data.claims),
-                }
+                Ok(parse_token(token).await?.claims)
             }
         }
     }
@@ -123,18 +111,16 @@ impl From<AuthError> for String {
 pub struct TokenApi;
 
 impl Api for TokenApi {
-    fn route(app_state: AppState) -> CheckRouter {
-        let not_need_login = Router::new()
-            .route("/login", post(login))
+    fn route(app_state: AppState) -> Router {
+        Router::new()
             .route("/logout", delete(logout))
-            .with_state(app_state.clone());
-
-        let need_login = Router::new().route("/renew", post(renew));
-        CheckRouter {
-            need_login: Some(need_login),
-            not_need_login: Some(not_need_login),
-            app_state,
-        }
+            .route("/renew", post(renew))
+            .route_layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                middleware::check_login,
+            ))
+            .route("/login", post(login))
+            .with_state(app_state.clone())
     }
 }
 
@@ -319,4 +305,12 @@ mod test {
 
 pub(crate) async fn delete_login_status(user_id: i32) {
     LOGIN_USER.remove(&user_id).await;
+}
+
+pub(crate) async fn check_token_expire(token: Token) -> Result<(), AuthError> {
+    // 判断是否是已登陆用户，LOGIN_USER的内存过期时间与token的expire时间一致，因此只需判断是否存在即可
+    match LOGIN_USER.get(&token.id).await {
+        None => Err(AuthError::InvalidToken),
+        Some(_) => Ok(()),
+    }
 }

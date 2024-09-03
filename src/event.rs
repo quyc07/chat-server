@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::message::ChatMessage;
-use crate::{Api, CheckRouter};
+use crate::{middleware, Api};
 use axum::extract::State;
 use axum::response::sse::Event;
 use axum::response::Sse;
@@ -27,19 +27,18 @@ use tower_http::services::ServeDir;
 pub struct EventApi;
 
 impl Api for EventApi {
-    fn route(app_state: AppState) -> CheckRouter {
+    fn route(app_state: AppState) -> Router {
         let assets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
         let static_files_service = ServeDir::new(assets_dir).append_index_html_on_directories(true);
         // build our application with a route
-        let need_login = Router::new()
+        Router::new()
             .fallback_service(static_files_service)
             .route("/stream", get(event_handler))
-            .with_state(app_state.clone());
-        CheckRouter {
-            need_login: Some(need_login),
-            not_need_login: None,
-            app_state,
-        }
+            .route_layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                middleware::check_login,
+            ))
+            .with_state(app_state.clone())
     }
 }
 

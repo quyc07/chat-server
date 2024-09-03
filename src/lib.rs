@@ -24,9 +24,47 @@ pub mod user;
 pub mod validate;
 
 pub trait Api {
-    fn route(app_state: AppState) -> CheckRouter;
+    fn route(app_state: AppState) -> Router;
+}
+#[deprecated]
+pub struct AppRouter(Vec<EveryRouter>);
+#[deprecated]
+enum EveryRouter {
+    NeedLogin(Router, AppState),
+    CheckStatus(Router, AppState),
+    NotNeedLogin(Router, AppState),
 }
 
+impl AppRouter {
+    pub fn route(&self) -> Router {
+        self.0
+            .iter()
+            .map(|x| match x {
+                EveryRouter::NeedLogin(router, app_state) => {
+                    router
+                        .clone()
+                        .route_layer(axum::middleware::from_fn_with_state(
+                            app_state.clone(),
+                            middleware::check_user_status,
+                        ))
+                }
+                EveryRouter::CheckStatus(router, app_state) => router
+                    .clone()
+                    .route_layer(axum::middleware::from_fn_with_state(
+                        app_state.clone(),
+                        middleware::check_user_status,
+                    ))
+                    .route_layer(axum::middleware::from_fn_with_state(
+                        app_state.clone(),
+                        middleware::check_user_status,
+                    )),
+                EveryRouter::NotNeedLogin(router, _) => router.clone(),
+            })
+            .fold(Router::new(), |acc, x| acc.merge(x))
+    }
+}
+
+#[deprecated]
 pub struct CheckRouter {
     need_login: Option<Router>,
     not_need_login: Option<Router>,
