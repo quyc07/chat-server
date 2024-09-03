@@ -95,9 +95,12 @@ pub enum UserErr {
     /// User not exist
     #[error("用户{0}不存在")]
     UserNotExist(i32),
+    /// Login user was Freeze
+    #[error("您的账号已冻结，请先申请解冻")]
+    LoginUserWasFreeze,
     /// User was Freeze
-    #[error("用户{0}状态异常")]
-    UserWasFreeze(i32),
+    #[error("对方的账号异常，请谨慎操作")]
+    UserWasFreeze(String),
 }
 
 impl ErrPrint for UserErr {}
@@ -203,7 +206,7 @@ async fn send(
         return Err(ServerError::from(friend::FriendErr::NotFriend(uid)));
     }
     // 判断目标用户是否冻结
-    check_status(uid, &app_state).await?;
+    check_status(uid, token.id, &app_state).await?;
     let payload = msg.build_payload(token.id, MessageTarget::User(MessageTargetUser { uid }));
     let mid = message::send_msg(payload, &app_state).await?;
     // 设置read_index
@@ -481,15 +484,19 @@ async fn password(
 }
 
 // 判断用户状态是否是冻结状态，如果是冻结状态，则抛出用户状态异常的error
-pub(crate) async fn check_status(uid: i32, app_state: &AppState) -> Result<(), ServerError> {
+pub(crate) async fn check_status(
+    uid: i32,
+    login_uid: i32,
+    app_state: &AppState,
+) -> Result<(), ServerError> {
     match User::find_by_id(uid).one(&app_state.db).await? {
         None => Err(ServerError::from(UserErr::UserNotExist(uid))),
-        Some(user) => {
-            if user.status == UserStatus::Normal {
-                Err(ServerError::from(UserErr::UserWasFreeze(uid)))
-            } else {
-                Ok(())
+        Some(user) => match user.status {
+            UserStatus::Freeze if login_uid != uid => {
+                Err(ServerError::from(UserErr::UserWasFreeze(user.name)))
             }
-        }
+            UserStatus::Freeze => Err(ServerError::from(UserErr::LoginUserWasFreeze)),
+            UserStatus::Normal => Ok(()),
+        },
     }
 }

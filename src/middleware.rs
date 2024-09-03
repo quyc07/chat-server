@@ -13,7 +13,7 @@ pub(crate) async fn check_user_status(
     request: Request,
     next: Next,
 ) -> Response {
-    if let Err(err) = user::check_status(token.id, &state).await {
+    if let Err(err) = user::check_status(token.id, token.id, &state).await {
         return err.into_response();
     }
     let response = next.run(request).await;

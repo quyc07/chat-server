@@ -77,6 +77,10 @@ impl IntoResponse for ServerError {
                         StatusCode::UNAUTHORIZED,
                         Json(AppRes::fail_with_msg(err.to_string())),
                     ),
+                    UserErr::LoginUserWasFreeze => (
+                        StatusCode::UNAUTHORIZED,
+                        Json(AppRes::fail_with_msg(err.to_string())),
+                    ),
                 }
             }
             ServerError::GroupErr(err) => {
