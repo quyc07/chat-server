@@ -366,7 +366,7 @@ async fn history(
                     msg: mid_2_msg
                         .get(&x.latest_mid)
                         .map(|x| x.payload.detail.get_content())
-                        .unwrap_or(String::from("")),
+                        .unwrap_or(String::from("未知消息")),
                     msg_time: mid_2_msg
                         .get(&x.latest_mid)
                         .map(|x| x.payload.created_at)
@@ -415,7 +415,7 @@ async fn history(
                     msg: mid_2_msg
                         .get(&x.latest_mid)
                         .map(|x| x.payload.detail.get_content())
-                        .unwrap_or(String::from("")),
+                        .unwrap_or(String::from("未知消息")),
                     msg_time: mid_2_msg
                         .get(&x.latest_mid)
                         .map(|x| x.payload.created_at)
