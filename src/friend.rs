@@ -55,12 +55,14 @@ struct Request {
     reason: Option<String>,
 }
 
+/// 发送好友请求
 async fn request(
     State(app_state): State<AppState>,
     Path(friend_id): Path<i32>,
     token: Token,
     Json(Request { reason }): Json<Request>,
 ) -> Res<()> {
+    user::check_status(friend_id, token.id, &app_state).await?;
     // 1. 若两者已是好友，则直接返回
     if dgraph::is_friend(token.dgraph_uid, friend_id).await? {
         return Ok(AppRes::success_with_msg(

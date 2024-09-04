@@ -194,19 +194,20 @@ impl From<user::Model> for UserRegisterRes {
     }
 }
 
-// 按照参数定义的先后顺序进行解析，ValidatedJson会消耗掉Request，因此要放在最后面解析
+/// 向好友发送消息
 async fn send(
     State(app_state): State<AppState>,
     Path(uid): Path<i32>,
     token: Token,
+    // 按照参数定义的先后顺序进行解析，ValidatedJson会消耗掉Request，因此要放在最后面解析
     ValidatedJson(msg): ValidatedJson<SendMsgReq>,
 ) -> Res<i64> {
+    // 校验好友状态
+    check_status(uid, token.id, &app_state).await?;
     // 判断是否是好友
     if !friend::is_friend(token.dgraph_uid, uid).await {
         return Err(ServerError::from(friend::FriendErr::NotFriend(uid)));
     }
-    // 判断目标用户是否冻结
-    check_status(uid, token.id, &app_state).await?;
     let payload = msg.build_payload(token.id, MessageTarget::User(MessageTargetUser { uid }));
     let mid = message::send_msg(payload, &app_state).await?;
     // 设置read_index
