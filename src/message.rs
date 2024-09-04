@@ -1,15 +1,14 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use chrono::{DateTime, Local};
-use futures::{FutureExt, StreamExt};
-use serde::{Deserialize, Serialize};
-use validator::Validate;
-
 use crate::app_state::AppState;
 use crate::err::ServerError;
 use crate::event::BroadcastEvent;
 use crate::group;
+use chrono::{DateTime, Local};
+use futures::{FutureExt, StreamExt};
+use serde::{Deserialize, Serialize};
+use validator::Validate;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ChatMessagePayload {
@@ -250,4 +249,36 @@ pub(crate) fn get_by_mids(mids: Vec<i64>, app_state: &AppState) -> Vec<ChatMessa
         })
         .filter_map(|(mid, msg)| build_chat_message(mid, msg))
         .collect()
+}
+
+/// 查询群未读消息数量
+pub(crate) fn count_group_unread(gid: i32, mid: i64, app_state: &AppState) -> Option<usize> {
+    match app_state
+        .msg_db
+        .lock()
+        .unwrap()
+        .messages()
+        .count_group_messages_after(gid as i64, mid)
+    {
+        Ok(count) if count > 0 => Some(count),
+        _ => None,
+    }
+}
+/// 查询单聊未读消息数量
+pub(crate) fn count_dm_unread(
+    from_uid: i32,
+    to_uid: i32,
+    mid: i64,
+    app_state: &AppState,
+) -> Option<usize> {
+    match app_state
+        .msg_db
+        .lock()
+        .unwrap()
+        .messages()
+        .count_dm_messages_after(from_uid as i64, to_uid as i64, mid)
+    {
+        Ok(count) if count > 0 => Some(count),
+        _ => None,
+    }
 }

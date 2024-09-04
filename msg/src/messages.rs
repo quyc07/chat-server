@@ -110,6 +110,15 @@ impl<'a> Messages<'a> {
         Ok(msgs)
     }
 
+    /// 统计after之后的单聊消息数量
+    pub fn count_dm_messages_after(&self, from_uid: i64, to_uid: i64, after: i64) -> Result<usize> {
+        Ok(self
+            .db
+            .db
+            .range(key_dm_msg(from_uid, to_uid, after)..key_dm_msg(from_uid, to_uid, i64::MAX))
+            .count())
+    }
+
     /// 获取群聊消息，before之前的limit条消息
     pub fn fetch_group_messages_before(
         &self,
@@ -142,6 +151,15 @@ impl<'a> Messages<'a> {
 
         msgs.reverse();
         Ok(msgs)
+    }
+
+    /// 统计after之后的群消息数量
+    pub fn count_group_messages_after(&self, gid: i64, after: i64) -> Result<usize> {
+        Ok(self
+            .db
+            .db
+            .range(key_group_msg(gid, after)..key_group_msg(gid, i64::MAX))
+            .count())
     }
 
     /// 插入消息

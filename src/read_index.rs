@@ -1,13 +1,14 @@
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::err::ServerError;
-use crate::{middleware, Api, AppRes, Res};
+use crate::{group, message, middleware, Api, AppRes, Res};
 use axum::extract::State;
 use axum::routing::put;
 use axum::{Json, Router};
 use entity::read_index;
+use entity::read_index::{ActiveModel, Model};
 use sea_orm::ActiveValue::Set;
-use sea_orm::{sea_query, DbErr, EntityTrait};
+use sea_orm::{sea_query, DbErr, EntityTrait, NotSet};
 use serde::{Deserialize, Serialize};
 
 pub struct ReadIndexApi;
@@ -26,8 +27,8 @@ impl Api for ReadIndexApi {
 
 #[derive(Deserialize, Serialize)]
 pub(crate) enum UpdateReadIndex {
-    User { uid: i32, mid: i64, uid_of_msg: i32 },
-    Group { gid: i32, mid: i64, uid_of_msg: i32 },
+    User { target_uid: i32, mid: i64 },
+    Group { target_gid: i32, mid: i64 },
 }
 
 async fn read_index(
@@ -45,18 +46,15 @@ pub(crate) async fn set_read_index(
     read_index: UpdateReadIndex,
 ) -> Result<(), ServerError> {
     Ok(match read_index {
-        UpdateReadIndex::User {
-            uid,
-            mid,
-            uid_of_msg,
-        } => {
-            let active_model = read_index::ActiveModel {
+        UpdateReadIndex::User { target_uid, mid } => {
+            let active_model = ActiveModel {
                 id: Set(Default::default()),
                 uid: Set(uid),
-                target_uid: Set(Some(uid)),
-                target_gid: Default::default(),
+                target_uid: Set(Some(target_uid)),
+                target_gid: NotSet,
                 mid: Set(mid),
-                uid_of_msg: Set(uid_of_msg),
+                latest_mid: Set(mid),
+                uid_of_latest_msg: Set(uid),
             };
             let result = read_index::Entity::insert(active_model)
                 .on_conflict(
@@ -64,7 +62,11 @@ pub(crate) async fn set_read_index(
                         read_index::Column::Uid,
                         read_index::Column::TargetUid,
                     ])
-                    .update_column(read_index::Column::Mid)
+                    .update_columns(vec![
+                        read_index::Column::Mid,
+                        read_index::Column::LatestMid,
+                        read_index::Column::UidOfLatestMsg,
+                    ])
                     .to_owned(),
                 )
                 .exec(&app_state.db)
@@ -72,34 +74,92 @@ pub(crate) async fn set_read_index(
             if let Err(DbErr::RecordNotInserted) = result {
                 // do nothing
             }
+            let active_model = ActiveModel {
+                id: Set(Default::default()),
+                uid: Set(target_uid),
+                target_uid: Set(Some(uid)),
+                target_gid: Default::default(),
+                mid: NotSet,
+                latest_mid: Set(mid),
+                uid_of_latest_msg: Set(uid),
+            };
+            read_index::Entity::insert(active_model)
+                .on_conflict(
+                    sea_query::OnConflict::columns([
+                        read_index::Column::Uid,
+                        read_index::Column::TargetUid,
+                    ])
+                    .update_columns(vec![
+                        read_index::Column::LatestMid,
+                        read_index::Column::UidOfLatestMsg,
+                    ])
+                    .to_owned(),
+                )
+                .exec(&app_state.db)
+                .await?;
         }
-        UpdateReadIndex::Group {
-            gid,
-            mid,
-            uid_of_msg,
-        } => {
-            let active_model = read_index::ActiveModel {
+        UpdateReadIndex::Group { target_gid, mid } => {
+            let active_model = ActiveModel {
                 id: Set(Default::default()),
                 uid: Set(uid),
-                target_uid: Default::default(),
-                target_gid: Set(Some(gid)),
+                target_uid: NotSet,
+                target_gid: Set(Some(target_gid)),
                 mid: Set(mid),
-                uid_of_msg: Set(uid_of_msg),
+                latest_mid: Set(mid),
+                uid_of_latest_msg: Set(uid),
             };
-            let result = read_index::Entity::insert(active_model)
+            read_index::Entity::insert(active_model)
                 .on_conflict(
                     sea_query::OnConflict::columns([
                         read_index::Column::Uid,
                         read_index::Column::TargetGid,
                     ])
-                    .update_column(read_index::Column::Mid)
+                    .update_columns(vec![
+                        read_index::Column::Mid,
+                        read_index::Column::LatestMid,
+                        read_index::Column::UidOfLatestMsg,
+                    ])
                     .to_owned(),
                 )
                 .exec(&app_state.db)
-                .await;
-            if let Err(DbErr::RecordNotInserted) = result {
-                // do nothing
-            }
+                .await?;
+            let ris = group::get_uids(app_state, target_gid)
+                .await?
+                .into_iter()
+                .map(|rest_uid_of_group| {
+                    return ActiveModel {
+                        id: Set(Default::default()),
+                        uid: Set(rest_uid_of_group),
+                        target_uid: NotSet,
+                        target_gid: Set(Some(target_gid)),
+                        mid: NotSet,
+                        latest_mid: Set(mid),
+                        uid_of_latest_msg: Set(uid),
+                    };
+                })
+                .collect::<Vec<ActiveModel>>();
+            read_index::Entity::insert_many(ris)
+                .on_conflict(
+                    sea_query::OnConflict::columns([
+                        read_index::Column::Uid,
+                        read_index::Column::TargetGid,
+                    ])
+                    .update_columns(vec![
+                        read_index::Column::LatestMid,
+                        read_index::Column::UidOfLatestMsg,
+                    ])
+                    .to_owned(),
+                )
+                .exec(&app_state.db)
+                .await?;
         }
     })
+}
+
+pub(crate) fn count_unread_msg(ri: &Model, app_state: &AppState) -> Option<usize> {
+    match (ri.target_uid, ri.target_gid) {
+        (Some(target_uid), None) => message::count_dm_unread(ri.uid, target_uid, ri.mid, app_state),
+        (None, Some(target_gid)) => message::count_group_unread(target_gid, ri.mid, app_state),
+        _ => None,
+    }
 }

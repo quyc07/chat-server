@@ -215,9 +215,8 @@ async fn send(
         &app_state,
         token.id,
         UpdateReadIndex::User {
-            uid,
+            target_uid: uid,
             mid,
-            uid_of_msg: token.id,
         },
     )
     .await?;
@@ -281,6 +280,7 @@ enum ChatListVo {
         msg: String,
         #[serde(with = "datetime_format")]
         msg_time: DateTime<Local>,
+        unread: Option<usize>,
     },
     Group {
         gid: i32,
@@ -291,6 +291,7 @@ enum ChatListVo {
         msg: String,
         #[serde(with = "datetime_format")]
         msg_time: DateTime<Local>,
+        unread: Option<usize>,
     },
 }
 
@@ -342,7 +343,7 @@ async fn history(
         Some(ri_of_users) => {
             let (uids, mids) = ri_of_users
                 .iter()
-                .map(|x| (x.target_uid.unwrap(), x.mid))
+                .map(|x| (x.target_uid.unwrap(), x.latest_mid))
                 .collect::<(Vec<i32>, Vec<i64>)>();
             let uid_2_name = get_by_ids(uids, &app_state)
                 .await?
@@ -361,15 +362,16 @@ async fn history(
                         .get(&x.target_uid.unwrap())
                         .unwrap_or(&String::from("未知用户"))
                         .to_string(),
-                    mid: x.mid,
+                    mid: x.latest_mid,
                     msg: mid_2_msg
-                        .get(&x.mid)
+                        .get(&x.latest_mid)
                         .map(|x| x.payload.detail.get_content())
                         .unwrap_or(String::from("")),
                     msg_time: mid_2_msg
-                        .get(&x.mid)
+                        .get(&x.latest_mid)
                         .map(|x| x.payload.created_at)
                         .unwrap_or(Local::now()),
+                    unread: read_index::count_unread_msg(x, &app_state),
                 })
                 .collect()
         }
@@ -378,11 +380,10 @@ async fn history(
     let chat_of_group = match map.get(&ChatTarget::Group) {
         None => vec![],
         Some(ris_of_group) => {
-            let (gid_uid, mids) = ris_of_group
+            let ((gids, uids), mids) = ris_of_group
                 .iter()
-                .map(|x| ((x.target_gid.unwrap(), x.uid_of_msg), x.mid))
-                .collect::<(Vec<(i32, i32)>, Vec<i64>)>();
-            let (gids, uids) = gid_uid.into_iter().collect::<(Vec<i32>, Vec<i32>)>();
+                .map(|x| ((x.target_gid.unwrap(), x.uid_of_latest_msg), x.latest_mid))
+                .collect::<((Vec<i32>, Vec<i32>), Vec<i64>)>();
             let uid_2_name = get_by_ids(uids, &app_state)
                 .await?
                 .into_iter()
@@ -405,20 +406,21 @@ async fn history(
                         .get(&x.target_gid.unwrap())
                         .unwrap_or(&String::from("未知群聊"))
                         .to_string(),
-                    uid: x.uid_of_msg,
+                    uid: x.uid_of_latest_msg,
                     user_name: uid_2_name
-                        .get(&x.uid_of_msg)
+                        .get(&x.uid_of_latest_msg)
                         .unwrap_or(&String::from("未知用户"))
                         .to_string(),
-                    mid: x.mid,
+                    mid: x.latest_mid,
                     msg: mid_2_msg
-                        .get(&x.mid)
+                        .get(&x.latest_mid)
                         .map(|x| x.payload.detail.get_content())
                         .unwrap_or(String::from("")),
                     msg_time: mid_2_msg
-                        .get(&x.mid)
+                        .get(&x.latest_mid)
                         .map(|x| x.payload.created_at)
                         .unwrap_or(Local::now()),
+                    unread: read_index::count_unread_msg(x, &app_state),
                 })
                 .collect()
         }

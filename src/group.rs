@@ -30,9 +30,7 @@ use crate::message::{
 use crate::read_index::UpdateReadIndex;
 use crate::user::UserErr;
 use crate::validate::ValidatedJson;
-use crate::{
-    message, middleware, read_index, user, Api, AppRes, Res,
-};
+use crate::{message, middleware, read_index, user, Api, AppRes, Res};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -217,7 +215,10 @@ async fn add(State(app_state): State<AppState>, Path(req): Path<AddReq>, _: Toke
     if !user::exist(req.uid, &app_state).await? {
         return Err(ServerError::from(UserErr::UserNotExist(req.uid)));
     }
-    if check_group_status(req.gid, req.uid, &app_state).await?.in_group {
+    if check_group_status(req.gid, req.uid, &app_state)
+        .await?
+        .in_group
+    {
         return Ok(AppRes::success_with_msg(
             "用户已在群内，无需再次添加".to_string(),
         ));
@@ -251,7 +252,11 @@ struct CheckStatus {
     forbid: bool,
 }
 
-async fn check_group_status(gid: i32, uid: i32, app_state: &AppState) -> Result<CheckStatus, DbErr> {
+async fn check_group_status(
+    gid: i32,
+    uid: i32,
+    app_state: &AppState,
+) -> Result<CheckStatus, DbErr> {
     UserGroupRel::find()
         .filter(user_group_rel::Column::GroupId.eq(gid))
         .filter(user_group_rel::Column::UserId.eq(uid))
@@ -274,7 +279,10 @@ async fn remove(
     if !user::exist(req.uid, &app_state).await? {
         return Err(ServerError::from(UserErr::UserNotExist(req.uid)));
     }
-    if !check_group_status(req.gid, req.uid, &app_state).await?.in_group {
+    if !check_group_status(req.gid, req.uid, &app_state)
+        .await?
+        .in_group
+    {
         return Err(ServerError::from(GroupErr::UserNotInGroup {
             uid: req.uid,
             gid: req.gid,
@@ -513,14 +521,13 @@ async fn send(
     }
     let payload = msg.build_payload(token.id, MessageTarget::Group(MessageTargetGroup { gid }));
     let mid = message::send_msg(payload, &app_state).await?;
-    // 设置read_index
+    // 设置当前用户的read_index
     read_index::set_read_index(
         &app_state,
         token.id,
         UpdateReadIndex::Group {
-            gid,
+            target_gid: gid,
             mid,
-            uid_of_msg: token.id,
         },
     )
     .await?;
@@ -549,7 +556,10 @@ pub(crate) async fn history(
     token: Token,
     Path(gid): Path<i32>,
 ) -> Res<Vec<GroupHistoryMsg>> {
-    if !check_group_status(gid, token.id, &app_state).await?.in_group {
+    if !check_group_status(gid, token.id, &app_state)
+        .await?
+        .in_group
+    {
         return Err(ServerError::from(GroupErr::UserNotInGroup {
             uid: token.id,
             gid,
