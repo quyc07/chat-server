@@ -4,7 +4,7 @@ use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::datetime::datetime_format;
 use crate::err::{ErrPrint, ServerError};
-use crate::friend::dgraph::{Location, Point};
+use crate::friend::dgraph::{FriendVo, Location, Point};
 use crate::{datetime, middleware, user, Api, AppRes, Res};
 use axum::extract::{Path, State};
 use axum::routing::{get, patch, post};
@@ -25,7 +25,7 @@ pub struct FriendApi;
 impl Api for FriendApi {
     fn route(app_state: AppState) -> Router {
         Router::new()
-            .route("/loc", patch(set_loc))
+            .route("/loc/:radius", patch(set_loc).get(nearby))
             .route("/req/:uid", post(request))
             .route("/req", post(review))
             .route_layer(axum::middleware::from_fn_with_state(
@@ -246,4 +246,31 @@ async fn set_loc(token: Token, Json(loc): Json<Loc>) -> Res<()> {
     )
     .await?;
     Ok(AppRes::success(()))
+}
+
+async fn nearby(token: Token, Path(radius): Path<i32>) -> Res<Vec<FriendVo>> {
+    if let Some(friends) = dgraph::get_friends(token.dgraph_uid.as_str()).await? {
+        if let Some(loc) = friends.loc {
+            match loc.r#type.as_str() {
+                "Point" => {
+                    return Ok(AppRes::success(
+                        dgraph::nearby(
+                            Location::Point(Point {
+                                long: loc.coordinates[0],
+                                lat: loc.coordinates[1],
+                            }),
+                            radius,
+                        )
+                        .await?,
+                    ))
+                }
+                "Polygon" => {
+                    todo!("待实现区域");
+                }
+                "MultiPolygon" => {}
+                _ => {}
+            }
+        }
+    }
+    Ok(AppRes::success(vec![]))
 }

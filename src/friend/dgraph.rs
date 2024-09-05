@@ -59,7 +59,7 @@ struct MutateData<T> {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct UidData<T> {
+struct UserData<T> {
     user: Vec<T>,
 }
 
@@ -177,21 +177,22 @@ pub async fn is_friend(dgraph_uid: String, friend_id: i32) -> Result<bool, Error
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct Friend {
+pub(crate) struct FriendVo {
     pub uid: String,
     pub user_id: i32,
     pub name: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct FriendRes {
+pub(crate) struct GetFriendRes {
     pub uid: String,
     pub user_id: i32,
     pub name: String,
-    pub friend: Option<Vec<Friend>>,
+    pub loc: Option<Loc>,
+    pub friend: Option<Vec<FriendVo>>,
 }
 
-pub async fn get_friends(dgraph_uid: &str) -> Result<Option<FriendRes>, Error> {
+pub async fn get_friends(dgraph_uid: &str) -> Result<Option<GetFriendRes>, Error> {
     let client = Client::new();
     let url = format!("{}/query", DGRAPH_URL);
     let value = "
@@ -205,6 +206,7 @@ pub async fn get_friends(dgraph_uid: &str) -> Result<Option<FriendRes>, Error> {
             uid
             name
             user_id
+            loc
             friend {
                 uid,
                 name,
@@ -218,13 +220,13 @@ pub async fn get_friends(dgraph_uid: &str) -> Result<Option<FriendRes>, Error> {
         .header("Content-type", "application/dql")
         .send()
         .await?;
-    let res = res.json::<DgraphRes<UidData<FriendRes>>>().await?;
+    let res = res.json::<DgraphRes<UserData<GetFriendRes>>>().await?;
     Ok(res.data.user.first().map(|t| t.clone()))
 }
 
 #[cfg(test)]
 mod test {
-    use crate::friend::dgraph::{DgraphRes, FriendRes, UidData};
+    use crate::friend::dgraph::{DgraphRes, GetFriendRes, UserData};
     use serde_json::json;
 
     #[test]
@@ -262,7 +264,7 @@ mod test {
           }
         });
         let result =
-            serde_json::from_slice::<DgraphRes<UidData<FriendRes>>>(value.to_string().as_ref());
+            serde_json::from_slice::<DgraphRes<UserData<GetFriendRes>>>(value.to_string().as_ref());
         println!("{:?}", result)
     }
 }
@@ -289,8 +291,8 @@ struct Extensions {
     pub txn: Txn,
 }
 
-#[derive(Serialize, Deserialize)]
-struct Loc {
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Loc {
     #[serde(rename = "type")]
     pub r#type: String,
     pub coordinates: Vec<f64>,
@@ -338,4 +340,44 @@ pub(crate) async fn set_loc(uid: String, loc: Location) -> Result<(), ServerErro
         .json::<DgraphRes<MutateData<HashMap<String, String>>>>()
         .await?;
     Ok(())
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct NearByData<T> {
+    nearby: Vec<T>,
+}
+pub(crate) async fn nearby(loc: Location, radius: i32) -> Result<Vec<FriendVo>, ServerError> {
+    let client = Client::new();
+    let url = format!("{DGRAPH_URL}/query");
+    let body = match loc {
+        Location::Point(Point { long, lat }) => {
+            "
+   {
+       nearby(func: near(loc, "
+                .to_string()
+                + &format!("[{long},{lat}]")
+                + ", "
+                + radius.to_string().as_str()
+                + ") ) {
+           uid,
+           name,
+           user_id
+       }
+   }"
+        }
+        Location::Polygon(_) => {
+            todo!()
+        }
+        Location::MultiPolygon(_) => {
+            todo!()
+        }
+    };
+    let res = client
+        .post(url)
+        .body(body)
+        .header("Content-type", "application/dql")
+        .send()
+        .await?;
+    let res = res.json::<DgraphRes<NearByData<FriendVo>>>().await?;
+    Ok(res.data.nearby)
 }
