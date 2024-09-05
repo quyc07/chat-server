@@ -4,9 +4,10 @@ use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::datetime::datetime_format;
 use crate::err::{ErrPrint, ServerError};
+use crate::friend::dgraph::{Location, Point};
 use crate::{datetime, middleware, user, Api, AppRes, Res};
 use axum::extract::{Path, State};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Local};
 use entity::friend_request;
@@ -24,6 +25,7 @@ pub struct FriendApi;
 impl Api for FriendApi {
     fn route(app_state: AppState) -> Router {
         Router::new()
+            .route("/loc", patch(set_loc))
             .route("/req/:uid", post(request))
             .route("/req", post(review))
             .route_layer(axum::middleware::from_fn_with_state(
@@ -225,4 +227,23 @@ pub(crate) async fn is_friend(object_graph_id: String, user_id: i32) -> bool {
     dgraph::is_friend(object_graph_id, user_id)
         .await
         .unwrap_or(false)
+}
+
+#[derive(Deserialize, ToSchema)]
+struct Loc {
+    // #[validate(length(min = 1))]
+    longitude: f64,
+    // #[validate(length(min = 1))]
+    latitude: f64,
+}
+async fn set_loc(token: Token, Json(loc): Json<Loc>) -> Res<()> {
+    dgraph::set_loc(
+        token.dgraph_uid,
+        Location::Point(Point {
+            long: loc.longitude,
+            lat: loc.latitude,
+        }),
+    )
+    .await?;
+    Ok(AppRes::success(()))
 }

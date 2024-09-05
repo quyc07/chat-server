@@ -288,3 +288,54 @@ struct Extensions {
     pub server_latency: ServerLatency,
     pub txn: Txn,
 }
+
+#[derive(Serialize, Deserialize)]
+struct Loc {
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub coordinates: Vec<f64>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SetLoc {
+    pub uid: String,
+    pub loc: Loc,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Mutate<T> {
+    pub set: Vec<T>,
+}
+pub(crate) struct Point {
+    pub long: f64,
+    pub lat: f64,
+}
+pub(crate) enum Location {
+    Point(Point),
+    Polygon(Vec<Point>),
+    MultiPolygon(Vec<Vec<Point>>),
+}
+pub(crate) async fn set_loc(uid: String, loc: Location) -> Result<(), ServerError> {
+    let client = Client::new();
+    let url = format!("{DGRAPH_URL}/mutate?commitNow=true");
+    client
+        .post(url)
+        .json(&Mutate {
+            set: vec![SetLoc {
+                uid,
+                loc: match loc {
+                    Location::Point(Point { long, lat }) => Loc {
+                        r#type: "Point".to_string(),
+                        coordinates: vec![long, lat],
+                    },
+                    Location::Polygon(_) => todo!("待实现区域设置"),
+                    Location::MultiPolygon(_) => todo!(),
+                },
+            }],
+        })
+        .send()
+        .await?
+        .json::<DgraphRes<MutateData<HashMap<String, String>>>>()
+        .await?;
+    Ok(())
+}
