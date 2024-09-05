@@ -81,6 +81,10 @@ impl IntoResponse for ServerError {
                         StatusCode::UNAUTHORIZED,
                         Json(AppRes::fail_with_msg(err.to_string())),
                     ),
+                    UserErr::UserNameNotExist(_) => (
+                        StatusCode::NOT_FOUND,
+                        Json(AppRes::fail_with_msg(err.to_string())),
+                    ),
                 }
             }
             ServerError::GroupErr(err) => {

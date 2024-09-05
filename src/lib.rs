@@ -22,6 +22,7 @@ pub mod open_api;
 pub mod read_index;
 pub mod user;
 pub mod validate;
+pub mod admin;
 
 pub trait Api {
     fn route(app_state: AppState) -> Router;

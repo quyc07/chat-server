@@ -4,6 +4,10 @@ use std::ops::Add;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use crate::app_state::AppState;
+use crate::err::{ErrPrint, ServerError};
+use crate::validate::ValidatedJson;
+use crate::{middleware, user, Api, AppRes, Res};
 use axum::extract::{FromRequest, FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::routing::{delete, post};
@@ -13,6 +17,7 @@ use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
 use chrono::{DateTime, Local};
+use entity::sea_orm_active_enums::Role;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use moka::future::Cache;
 use serde::de::DeserializeOwned;
@@ -20,11 +25,6 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 use validator::Validate;
-
-use crate::app_state::AppState;
-use crate::err::{ErrPrint, ServerError};
-use crate::validate::ValidatedJson;
-use crate::{middleware, user, Api, AppRes, Res};
 
 const KEYS: LazyLock<Keys, fn() -> Keys> = LazyLock::new(|| {
     let secret = std::env::var("JWT_SECRET").unwrap_or("abc".to_string());
@@ -50,6 +50,7 @@ pub struct Token {
     pub email: String,
     pub phone: Option<String>,
     pub dgraph_uid: String,
+    pub role: Role,
     // 失效时间，timestamp
     exp: i64,
 }
@@ -62,6 +63,7 @@ impl From<entity::user::Model> for Token {
             email: value.email,
             phone: value.phone,
             dgraph_uid: value.dgraph_uid,
+            role: value.role,
             exp: expire_timestamp(),
         }
     }
@@ -98,6 +100,8 @@ pub enum AuthError {
     TokenCreation,
     #[error("无效的Token")]
     InvalidToken,
+    #[error("您没有Admin权限，无权限访问")]
+    NeedAdmin,
 }
 
 impl ErrPrint for AuthError {}
@@ -234,6 +238,7 @@ mod test {
             email: "email".to_string(),
             phone: None,
             dgraph_uid: Default::default(),
+            role: Default::default(),
             exp: Local::now().add(Duration::from_secs(3)).timestamp(),
         };
 
@@ -312,5 +317,13 @@ pub(crate) async fn check_token_expire(token: Token) -> Result<(), AuthError> {
     match LOGIN_USER.get(&token.id).await {
         None => Err(AuthError::InvalidToken),
         Some(_) => Ok(()),
+    }
+}
+
+pub(crate) async fn check_admin(token: Token) -> Result<bool, AuthError> {
+    match LOGIN_USER.get(&token.id).await {
+        None => Err(AuthError::InvalidToken),
+        Some(token) if token.role == Role::Admin => Ok(true),
+        _ => Ok(false),
     }
 }

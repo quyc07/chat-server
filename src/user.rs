@@ -41,7 +41,7 @@ use entity::user;
         register
     ),
     components(
-        schemas(UserRegisterReq, UserRegisterRes)
+        schemas(UserRegisterReq)
     ),
     tags(
         (name = "user", description = "USER API")
@@ -54,11 +54,11 @@ impl Api for UserApi {
         Router::new()
             .route("/:uid/send", post(send))
             .route("/password", patch(password))
+            .route("/:name", get(detail))
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 middleware::check_user_status,
             ))
-            .route("/all", get(all))
             .route("/:uid/history", get(user_history))
             .route("/history/:limit", get(history))
             .route_layer(axum::middleware::from_fn_with_state(
@@ -95,6 +95,9 @@ pub enum UserErr {
     /// User not exist
     #[error("用户{0}不存在")]
     UserNotExist(i32),
+    /// UserName not exist
+    #[error("用户{0}不存在")]
+    UserNameNotExist(String),
     /// Login user was Freeze
     #[error("您的账号已冻结，请先申请解冻")]
     LoginUserWasFreeze,
@@ -104,14 +107,6 @@ pub enum UserErr {
 }
 
 impl ErrPrint for UserErr {}
-
-async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<UserRegisterRes>> {
-    let result = User::find().all(&app_state.db).await;
-    let model = result?;
-    Ok(AppRes::success(
-        model.into_iter().map(UserRegisterRes::from).collect(),
-    ))
-}
 
 /// Register User.
 ///
@@ -128,7 +123,7 @@ async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<UserRegiste
 async fn register(
     State(app_state): State<AppState>,
     ValidatedJson(req): ValidatedJson<UserRegisterReq>,
-) -> Res<UserRegisterRes> {
+) -> Res<i32> {
     let name = req.name.as_str();
     if find_by_name(&app_state, name).await?.is_some() {
         return Err(ServerError::from(UserErr::UserNameExist(name.to_string())));
@@ -144,6 +139,7 @@ async fn register(
         update_time: Default::default(),
         status: ActiveValue::NotSet,
         dgraph_uid: Default::default(),
+        role: Default::default(),
     };
     let user = user.insert(&app_state.db).await?;
     // save dgraph, get dgraph_uid
@@ -156,40 +152,40 @@ async fn register(
     let mut user = user.into_active_model();
     user.dgraph_uid = Set(dgraph_uid);
     let user = user.update(&app_state.db).await?;
-    Ok(AppRes::success(UserRegisterRes::from(user)))
+    Ok(AppRes::success(user.id))
 }
 
 /// The new user.
 #[derive(Serialize, Deserialize, ToSchema)]
-struct UserRegisterRes {
+struct UserDetail {
     pub id: i32,
     #[schema(example = "User Name")]
     pub name: String,
     pub email: String,
     pub phone: Option<String>,
-    pub password: String,
     #[serde(with = "datetime_format")]
     pub create_time: DateTime<Local>,
     #[serde(with = "opt_datetime_format")]
     pub update_time: Option<DateTime<Local>>,
     pub status: String,
     pub dgraph_uid: String,
+    pub is_friend: bool,
 }
 
-impl From<user::Model> for UserRegisterRes {
+impl From<user::Model> for UserDetail {
     fn from(value: user::Model) -> Self {
         Self {
             id: value.id,
             name: value.name,
             email: value.email,
             phone: value.phone,
-            password: value.password,
             create_time: datetime::native_datetime_2_datetime(value.create_time),
             update_time: value
                 .update_time
                 .map(|t| datetime::native_datetime_2_datetime(t)),
             status: value.status.into(),
             dgraph_uid: value.dgraph_uid,
+            is_friend: false,
         }
     }
 }
@@ -501,5 +497,25 @@ pub(crate) async fn check_status(
             UserStatus::Freeze => Err(ServerError::from(UserErr::LoginUserWasFreeze)),
             UserStatus::Normal => Ok(()),
         },
+    }
+}
+
+/// 根据用户名查询用户详情，并判断是否是自己好友
+async fn detail(
+    State(app_state): State<AppState>,
+    Path(name): Path<String>,
+    token: Token,
+) -> Res<UserDetail> {
+    match User::find()
+        .filter(user::Column::Name.eq(name.clone()))
+        .one(&app_state.db)
+        .await?
+    {
+        None => Err(ServerError::from(UserErr::UserNameNotExist(name))),
+        Some(user) => {
+            let mut detail = UserDetail::from(user);
+            detail.is_friend = friend::is_friend(detail.dgraph_uid.clone(), token.id).await;
+            Ok(AppRes::success(detail))
+        }
     }
 }

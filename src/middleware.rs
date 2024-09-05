@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::auth::Token;
+use crate::auth::{AuthError, Token};
 use crate::err::ServerError;
 use crate::{auth, user};
 use axum::extract::{Request, State};
@@ -27,4 +27,12 @@ pub(crate) async fn check_login(token: Token, request: Request, next: Next) -> R
     }
     let response = next.run(request).await;
     response
+}
+
+pub(crate) async fn check_admin(token: Token, request: Request, next: Next) -> Response {
+    match auth::check_admin(token).await {
+        Err(err) => ServerError::from(err).into_response(),
+        Ok(true) => next.run(request).await,
+        _ => ServerError::from(AuthError::NeedAdmin).into_response(),
+    }
 }
