@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 pub mod app_state;
 pub mod auth;
@@ -100,7 +101,7 @@ impl CheckRouter {
 #[from_request(via(axum::Json))]
 pub struct AppJson<T>(pub T);
 
-#[derive(Serialize)]
+#[derive(Serialize,ToSchema)]
 pub struct AppRes<T: Serialize> {
     code: i8,
     msg: String,

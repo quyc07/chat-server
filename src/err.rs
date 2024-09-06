@@ -126,7 +126,7 @@ impl IntoResponse for ServerError {
             }
             ServerError::FriendErr(err) => {
                 err.print();
-                (StatusCode::OK, Json(AppRes::fail_with_msg(err.to_string())))
+                (StatusCode::UNAUTHORIZED, Json(AppRes::fail_with_msg(err.to_string())))
             }
         }
         .into_response()

@@ -42,10 +42,13 @@ impl Api for FriendApi {
     }
 }
 
+/// 好友相关错误
 #[derive(Debug, Error, ToSchema)]
 pub(crate) enum FriendErr {
+    /// 用户不是您的好友
     #[error("用户{0}不是您的好友")]
     NotFriend(i32),
+    /// 不能批准好友请求
     #[error("您不是该好友请求的目标对象，无权批准")]
     CanNotReviewFriendRequest,
 }

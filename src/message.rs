@@ -8,6 +8,7 @@ use crate::group;
 use chrono::{DateTime, Local};
 use futures::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use validator::Validate;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -25,8 +26,10 @@ pub struct ChatMessagePayload {
     pub detail: MessageDetail,
 }
 
-#[derive(Deserialize, Validate, Debug)]
+/// Send message request
+#[derive(Deserialize, Validate, Debug, ToSchema)]
 pub struct SendMsgReq {
+    /// Message content
     #[validate(length(min = 1, code = "1", message = "msg is blank"))]
     pub msg: String,
 }

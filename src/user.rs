@@ -38,10 +38,11 @@ use entity::user;
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        register
+        register,send,user_history,password,detail,history
     ),
     components(
-        schemas(UserRegisterReq)
+        schemas(UserRegisterReq,SendMsgReq,UserHistoryMsg,PasswordReq,
+        UserDetail,ChatVo,UserErr,friend::FriendErr)
     ),
     tags(
         (name = "user", description = "USER API")
@@ -116,8 +117,8 @@ impl ErrPrint for UserErr {}
     path = "/user/register",
     request_body = UserRegisterReq,
     responses(
-        (status = 200, description = "Register User and return the User successfully", body = [UserRegisterRes]),
-        (status = 409, description = "UserName already exists", body = [ServerError])
+        (status = 200, description = "Register User and return the User successfully", body = AppRes<i32> ),
+        (status = 409, description = "UserName already exists", body = UserErr)
     )
 )]
 async fn register(
@@ -155,20 +156,29 @@ async fn register(
     Ok(AppRes::success(user.id))
 }
 
-/// The new user.
+/// The User Detail.
 #[derive(Serialize, Deserialize, ToSchema)]
 struct UserDetail {
+    /// User id
     pub id: i32,
+    /// User name
     #[schema(example = "User Name")]
     pub name: String,
+    /// User email
     pub email: String,
+    /// User phone
     pub phone: Option<String>,
+    /// Create time
     #[serde(with = "datetime_format")]
     pub create_time: DateTime<Local>,
+    /// Update time
     #[serde(with = "opt_datetime_format")]
     pub update_time: Option<DateTime<Local>>,
+    /// User status
     pub status: String,
+    /// dgraph uid
     pub dgraph_uid: String,
+    /// Is friend
     pub is_friend: bool,
 }
 
@@ -190,6 +200,18 @@ impl From<user::Model> for UserDetail {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/{uid}/send",
+    params(
+        ("uid" = i32, Path, description = "id of friend")
+    ),
+    request_body = SendMsgReq,
+    responses(
+        (status = 200, description = "Send message to user successfully"),
+        (status = 401, description = "Friend was freeze", body = FriendErr),
+    ),
+)]
 /// 向好友发送消息
 async fn send(
     State(app_state): State<AppState>,
@@ -219,15 +241,32 @@ async fn send(
     Ok(AppRes::success(mid))
 }
 
-#[derive(Serialize)]
+/// 历史聊天记录
+#[derive(Serialize, ToSchema)]
 struct UserHistoryMsg {
+    /// 消息id
     mid: i64,
+    /// 消息内容
     msg: String,
+    /// 消息发送时间
     #[serde(with = "datetime_format")]
     time: DateTime<Local>,
+    /// 消息发送者id
     from_uid: i32,
 }
 
+#[utoipa::path(
+    get,
+    path = "/{uid}/history",
+    params(
+        ("uid" = i32, Path, description = "id of friend")
+    ),
+    responses(
+        (status = 200, description = "Get history message successfully", body = [UserHistoryMsg]),
+        (status = 401, description = "Target user is not friend of you", body = FriendErr),
+    ),
+)]
+/// 查询与好友的聊天记录
 async fn user_history(
     State(app_state): State<AppState>,
     Path(uid): Path<i32>,
@@ -267,49 +306,72 @@ enum ChatTarget {
     Group,
 }
 
-#[derive(Debug, Serialize, Hash, Eq, PartialEq)]
-enum ChatListVo {
+/// 聊天记录
+#[derive(Debug, Serialize, Hash, Eq, PartialEq, ToSchema)]
+enum ChatVo {
+    /// UserChat
     User {
+        /// id of friend
         uid: i32,
+        /// name of friend
         user_name: String,
+        /// message id
         mid: i64,
+        /// message content
         msg: String,
+        /// message time
         #[serde(with = "datetime_format")]
         msg_time: DateTime<Local>,
+        /// unread message count
         unread: Option<usize>,
     },
+    /// GroupChat
     Group {
+        /// id of group
         gid: i32,
+        /// name of group
         group_name: String,
+        /// id of friend
         uid: i32,
+        /// name of friend
         user_name: String,
+        /// message id
         mid: i64,
+        /// message content
         msg: String,
+        /// message time
         #[serde(with = "datetime_format")]
         msg_time: DateTime<Local>,
+        /// unread message count
         unread: Option<usize>,
     },
 }
 
-impl ChatListVo {
+impl ChatVo {
     fn get_msg_time(&self) -> &DateTime<Local> {
         match self {
-            ChatListVo::User { msg_time, .. } => msg_time,
-            ChatListVo::Group { msg_time, .. } => msg_time,
+            ChatVo::User { msg_time, .. } => msg_time,
+            ChatVo::Group { msg_time, .. } => msg_time,
         }
     }
 }
 
-#[derive(Debug, Serialize)]
-struct ChatList {
-    chat_list: Vec<ChatListVo>,
-}
+#[utoipa::path(
+    get,
+    path = "/history",
+    params(
+        ("limit" = u64, Path, description = "limit of chat list")
+    ),
+    responses(
+        (status = 200, description = "Get chat list successfully", body = ChatList),
+    ),
+)]
 /// 查询用户最近聊天列表
 async fn history(
     State(app_state): State<AppState>,
     Path(limit): Path<u64>,
     token: Token,
-) -> Res<ChatList> {
+) -> Res<Vec<ChatVo>> {
     let ris = entity::read_index::Entity::find()
         .filter(entity::read_index::Column::Uid.eq(token.id))
         .limit(limit)
@@ -352,7 +414,7 @@ async fn history(
                 .collect::<HashMap<i64, ChatMessage>>();
             ri_of_users
                 .into_iter()
-                .map(|x| ChatListVo::User {
+                .map(|x| ChatVo::User {
                     uid: x.target_uid.unwrap(),
                     user_name: uid_2_name
                         .get(&x.target_uid.unwrap())
@@ -396,7 +458,7 @@ async fn history(
                 .collect::<HashMap<i32, String>>();
             ris_of_group
                 .into_iter()
-                .map(|x| ChatListVo::Group {
+                .map(|x| ChatVo::Group {
                     gid: x.target_gid.unwrap(),
                     group_name: gid_2_name
                         .get(&x.target_gid.unwrap())
@@ -421,12 +483,12 @@ async fn history(
                 .collect()
         }
     };
-    let mut vec = chat_of_user
+    let mut history = chat_of_user
         .into_iter()
         .chain(chat_of_group)
-        .collect::<Vec<ChatListVo>>();
-    vec.sort_by(|x1, x2| x2.get_msg_time().cmp(&x1.get_msg_time()));
-    Ok(AppRes::success(ChatList { chat_list: vec }))
+        .collect::<Vec<ChatVo>>();
+    history.sort_by(|x1, x2| x2.get_msg_time().cmp(&x1.get_msg_time()));
+    Ok(AppRes::success(history))
 }
 
 pub async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::Model>, DbErr> {
@@ -458,11 +520,23 @@ pub async fn get_by_id(uid: i32, app_state: &AppState) -> Result<Option<user::Mo
         .await
 }
 
+/// 修改密码
 #[derive(Deserialize, ToSchema, Validate)]
 struct PasswordReq {
+    /// 新密码
     #[validate(length(min = 1, message = "password is blank"))]
     password: String,
 }
+
+#[utoipa::path(
+    post,
+    path = "/password",
+    request_body(content = PasswordReq, description = "修改密码", content_type = "application/json"),
+    responses(
+        (status = 404, description = "用户不存在", content_type = "application/json", body = UserErr)
+    ),
+)]
+/// 修改密码
 async fn password(
     State(app_state): State<AppState>,
     token: Token,
@@ -500,6 +574,17 @@ pub(crate) async fn check_status(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/{name}",
+    params(
+        ("name" = String, Path, description = "用户名")
+    ),
+    responses(
+        (status = 200, description = "查询成功", body = UserDetail),
+        (status = 404, description = "用户不存在", body = UserErr),
+    ),
+)]
 /// 根据用户名查询用户详情，并判断是否是自己好友
 async fn detail(
     State(app_state): State<AppState>,
