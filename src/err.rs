@@ -105,8 +105,9 @@ impl IntoResponse for ServerError {
                 }
             }
             ServerError::AuthErr(err) => {
+                // TODO 分情况返回错误码
                 err.print();
-                (StatusCode::OK, Json(AppRes::fail_with_msg(err.to_string())))
+                (StatusCode::UNAUTHORIZED, Json(AppRes::fail_with_msg(err.to_string())))
             }
             ServerError::MsgErr(err) => {
                 err.print();

@@ -101,6 +101,7 @@ impl CheckRouter {
 #[from_request(via(axum::Json))]
 pub struct AppJson<T>(pub T);
 
+// TODO 去除该无用封装，直接返回data
 #[derive(Serialize,ToSchema)]
 pub struct AppRes<T: Serialize> {
     code: i8,

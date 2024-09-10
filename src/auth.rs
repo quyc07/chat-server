@@ -47,7 +47,7 @@ static LOGIN_USER: LazyLock<Cache<i32, Token>> = LazyLock::new(|| {
 pub struct Token {
     pub id: i32,
     pub name: String,
-    pub email: String,
+    pub email: Option<String>,
     pub phone: Option<String>,
     pub dgraph_uid: String,
     pub role: Role,
@@ -92,6 +92,8 @@ where
 
 #[derive(Debug, Error)]
 pub enum AuthError {
+    #[error("用户不存在")]
+    UserNotExist,
     #[error("用户名或密码错误")]
     WrongCredentials,
     #[error("登录参数丢失")]
@@ -146,10 +148,15 @@ async fn login(
     State(app_state): State<AppState>,
     ValidatedJson(req): ValidatedJson<UserLoginReq>,
 ) -> Res<UserLoginRes> {
-    let user = user::find_by_name(&app_state, &req.name).await?.unwrap();
-    if user.password != req.password {
-        return Err(ServerError::from(AuthError::WrongCredentials));
-    }
+    let user = match user::find_by_name(&app_state, &req.name).await? {
+        None => return Err(ServerError::from(AuthError::UserNotExist)),
+        Some(user) => {
+            if user.password != req.password {
+                return Err(ServerError::from(AuthError::WrongCredentials));
+            }
+            user
+        }
+    };
     // Create the authorization token
     let token = Token::from(user);
     let access_token = gen_token(&token).await?;

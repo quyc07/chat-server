@@ -9,15 +9,16 @@ use std::string::ToString;
 
 const DGRAPH_URL: &str = "http://localhost:8080";
 
-pub async fn register(ud: FriendRegister) -> Result<String, ServerError> {
+pub async fn register(fr: FriendRegister) -> Result<String, ServerError> {
     let client = reqwest::Client::new();
     // 直接提交事务 参考：https://dgraph.io/docs/dql/clients/raw-http/#committing-the-transaction
     let url = format!("{}/mutate?commitNow=true", DGRAPH_URL);
     let value = json!({
         "set":[
             {
-                "name":ud.name,
-                "phone":ud.phone,
+                "name":fr.name,
+                "user_id":fr.user_id,
+                "phone":fr.phone,
                 "dgraph.type":"User",
                 "uid":"_:uid"
             }

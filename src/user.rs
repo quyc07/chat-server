@@ -79,7 +79,7 @@ struct UserRegisterReq {
     name: String,
     /// email
     #[validate(email)]
-    email: String,
+    email: Option<String>,
     /// password
     #[validate(length(min = 1))]
     password: String,
@@ -165,7 +165,7 @@ struct UserDetail {
     #[schema(example = "User Name")]
     pub name: String,
     /// User email
-    pub email: String,
+    pub email: Option<String>,
     /// User phone
     pub phone: Option<String>,
     /// Create time
