@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::datetime::datetime_format;
 use axum::extract::{Path, State};
 use axum::routing::{delete, get, patch, post, put};
-use axum::Router;
+use axum::{Json, Router};
 use chrono::{DateTime, Local};
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use sea_orm::ActiveValue::Set;
@@ -30,7 +30,7 @@ use crate::message::{
 use crate::read_index::UpdateReadIndex;
 use crate::user::UserErr;
 use crate::validate::ValidatedJson;
-use crate::{message, middleware, read_index, user, Api, AppRes, Res};
+use crate::{message, middleware, read_index, user, Api, Res};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -80,8 +80,16 @@ pub enum GroupErr {
     #[error("用户（ID={uid}）不在群（ID={gid}）内")]
     UserNotInGroup { uid: i32, gid: i32 },
     /// 通用异常
-    #[error("{0}")]
-    CommonErr(String),
+    #[error("用户已经被禁言")]
+    UserHasBeenForbid,
+    #[error("用户已经在群内")]
+    UserAlreadyInGroup,
+    #[error("用户未被禁言")]
+    UserWasNotForbid,
+    #[error("您不是群管理员，不能设置群主！")]
+    YouAreNotAdmin,
+    #[error("您已被禁言，无权发言")]
+    YouAreForbid,
 }
 
 impl ErrPrint for GroupErr {}
@@ -108,11 +116,9 @@ impl From<Model> for GroupRes {
     (status = 200, description = "Get all groups", body = [AllRes]),
     )
 )]
-async fn all(State(app_state): State<AppState>) -> Res<Vec<GroupRes>> {
+async fn all(State(app_state): State<AppState>) -> Res<Json<Vec<GroupRes>>> {
     let groups = Group::find().all(&app_state.db).await?;
-    Ok(AppRes::success(
-        groups.into_iter().map(GroupRes::from).collect(),
-    ))
+    Ok(Json(groups.into_iter().map(GroupRes::from).collect()))
 }
 
 #[utoipa::path(
@@ -122,7 +128,7 @@ async fn all(State(app_state): State<AppState>) -> Res<Vec<GroupRes>> {
     (status = 200, description = "Get all groups", body = [AllRes]),
     )
 )]
-async fn mine(State(app_state): State<AppState>, token: Token) -> Res<Vec<GroupRes>> {
+async fn mine(State(app_state): State<AppState>, token: Token) -> Res<Json<Vec<GroupRes>>> {
     let ugrs = UserGroupRel::find()
         .filter(user_group_rel::Column::UserId.eq(token.id))
         .all(&app_state.db)
@@ -132,9 +138,7 @@ async fn mine(State(app_state): State<AppState>, token: Token) -> Res<Vec<GroupR
         .filter(group::Column::Id.is_in(gids))
         .all(&app_state.db)
         .await?;
-    Ok(AppRes::success(
-        groups.into_iter().map(GroupRes::from).collect(),
-    ))
+    Ok(Json(groups.into_iter().map(GroupRes::from).collect()))
 }
 
 /// 采用stream操作可减少内存分配
@@ -153,9 +157,7 @@ async fn mine_stream(State(app_state): State<AppState>, token: Token) -> Res<Vec
             groups.push(g);
         }
     }
-    Ok(AppRes::success(
-        groups.into_iter().map(GroupRes::from).collect(),
-    ))
+    Ok(groups.into_iter().map(GroupRes::from).collect())
 }
 
 #[derive(Deserialize, Validate, ToSchema)]
@@ -172,11 +174,12 @@ struct CreateReq {
         (status = 200, description = "Create new group", body = [i32])
     )
 )]
+
 async fn create(
     State(app_state): State<AppState>,
     token: Token,
     ValidatedJson(req): ValidatedJson<CreateReq>,
-) -> Res<i32> {
+) -> Res<String> {
     let group = group::ActiveModel {
         id: Default::default(),
         name: Set(req.name),
@@ -186,7 +189,7 @@ async fn create(
     };
     let group = group.insert(&app_state.db).await?;
     add_to_group(&app_state, group.id, token.id).await?;
-    Ok(AppRes::success(group.id))
+    Ok(group.id.to_string())
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -210,21 +213,19 @@ struct RemoveReq {
 )]
 async fn add(State(app_state): State<AppState>, Path(req): Path<AddReq>, _: Token) -> Res<()> {
     if !exist(req.gid, &app_state).await? {
-        return Err(ServerError::from(GroupErr::GroupNotExist(req.gid)));
+        return Err(GroupErr::GroupNotExist(req.gid).into());
     }
     if !user::exist(req.uid, &app_state).await? {
-        return Err(ServerError::from(UserErr::UserNotExist(req.uid)));
+        return Err(UserErr::UserNotExist(req.uid).into());
     }
     if check_group_status(req.gid, req.uid, &app_state)
         .await?
         .in_group
     {
-        return Ok(AppRes::success_with_msg(
-            "用户已在群内，无需再次添加".to_string(),
-        ));
+        return Err(GroupErr::UserAlreadyInGroup.into());
     }
     add_to_group(&app_state, req.gid, req.uid).await?;
-    Ok(AppRes::success(()))
+    Ok(())
 }
 
 async fn add_to_group(app_state: &AppState, gid: i32, uid: i32) -> Result<(), ServerError> {
@@ -274,26 +275,27 @@ async fn remove(
     _: Token,
 ) -> Res<()> {
     if !exist(req.gid, &app_state).await? {
-        return Err(ServerError::from(GroupErr::GroupNotExist(req.gid)));
+        return Err(GroupErr::GroupNotExist(req.gid).into());
     }
     if !user::exist(req.uid, &app_state).await? {
-        return Err(ServerError::from(UserErr::UserNotExist(req.uid)));
+        return Err(UserErr::UserNotExist(req.uid).into());
     }
     if !check_group_status(req.gid, req.uid, &app_state)
         .await?
         .in_group
     {
-        return Err(ServerError::from(GroupErr::UserNotInGroup {
+        return Err(GroupErr::UserNotInGroup {
             uid: req.uid,
             gid: req.gid,
-        }));
+        }
+        .into());
     }
     UserGroupRel::delete_many()
         .filter(user_group_rel::Column::GroupId.eq(req.gid))
         .filter(user_group_rel::Column::UserId.eq(req.uid))
         .exec(&app_state.db)
         .await?;
-    Ok(AppRes::success(()))
+    Ok(())
 }
 
 async fn delete_group(
@@ -302,7 +304,7 @@ async fn delete_group(
     _: Token,
 ) -> Res<()> {
     if !exist(gid, &app_state).await? {
-        return Err(ServerError::from(GroupErr::GroupNotExist(gid)));
+        return Err(GroupErr::GroupNotExist(gid).into());
     }
     // 开启事务
     let x = app_state.db.begin().await?;
@@ -316,7 +318,7 @@ async fn delete_group(
         .await?;
     // 提交事务
     x.commit().await?;
-    Ok(AppRes::success(()))
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -338,24 +340,21 @@ async fn detail(
     State(app_state): State<AppState>,
     Path(gid): Path<i32>,
     token: Token,
-) -> Res<DetailRes> {
+) -> Res<Json<DetailRes>> {
     match Group::find_by_id(gid).one(&app_state.db).await? {
-        None => Err(ServerError::from(GroupErr::GroupNotExist(gid))),
+        None => Err(GroupErr::GroupNotExist(gid).into()),
         Some(group) => {
             let rels = get_rels(&app_state, gid).await?;
             // 显示值定数据类型，下面的contians()方法才能通过编译，否则程序无法推断出uids的类型，也就无法使用contains()方法
             let uids: Vec<i32> = rels.iter().map(|x| x.user_id).collect();
             // if !rels.iter().any(|x| x.user_id == token.id) {
             if !uids.contains(&token.id) {
-                return Err(ServerError::from(GroupErr::UserNotInGroup {
-                    uid: token.id,
-                    gid,
-                }));
+                return Err(GroupErr::UserNotInGroup { uid: token.id, gid }.into());
             }
             let uid_2_forbid: HashMap<i32, bool> =
                 rels.iter().map(|x| (x.user_id, x.forbid)).collect();
             let users = user::get_by_ids(uids, &app_state).await?;
-            Ok(AppRes::success(DetailRes {
+            Ok(Json(DetailRes {
                 group_id: gid,
                 name: group.name,
                 users: users
@@ -393,24 +392,19 @@ async fn admin(
     token: Token,
 ) -> Res<()> {
     match Group::find_by_id(gid).one(&app_state.db).await? {
-        None => Err(ServerError::from(GroupErr::GroupNotExist(gid))),
+        None => Err(GroupErr::GroupNotExist(gid).into()),
         Some(group) => {
             if group.admin != token.id {
-                return Err(ServerError::from(GroupErr::CommonErr(
-                    "您不是群管理员，不能设置群主！".to_string(),
-                )));
+                return Err(GroupErr::YouAreNotAdmin.into());
             }
             let uids = get_uids(&app_state, gid).await?;
             if !uids.contains(&uid) {
-                return Err(ServerError::from(GroupErr::UserNotInGroup {
-                    uid: token.id,
-                    gid,
-                }));
+                return Err(GroupErr::UserNotInGroup { uid: token.id, gid }.into());
             }
             let mut group = group.into_active_model();
             group.admin = Set(uid);
             group.update(&app_state.db).await?;
-            Ok(AppRes::success(()))
+            Ok(())
         }
     }
 }
@@ -421,12 +415,10 @@ async fn forbid(
     token: Token,
 ) -> Res<()> {
     match Group::find_by_id(gid).one(&app_state.db).await? {
-        None => Err(ServerError::from(GroupErr::GroupNotExist(gid))),
+        None => Err(GroupErr::GroupNotExist(gid).into()),
         Some(group) => {
             if group.admin != token.id {
-                return Err(ServerError::from(GroupErr::CommonErr(
-                    "您不是群管理员，不能设置禁言".to_string(),
-                )));
+                return Err(GroupErr::YouAreNotAdmin.into());
             }
             match UserGroupRel::find()
                 .filter(user_group_rel::Column::GroupId.eq(gid))
@@ -434,20 +426,15 @@ async fn forbid(
                 .one(&app_state.db)
                 .await?
             {
-                None => Err(ServerError::from(GroupErr::UserNotInGroup {
-                    uid: token.id,
-                    gid,
-                })),
+                None => Err(GroupErr::UserNotInGroup { uid: token.id, gid }.into()),
                 Some(ugr) => {
                     if ugr.forbid == true {
-                        return Ok(AppRes::success_with_msg(
-                            "用户已经禁言，无需再次禁言".to_string(),
-                        ));
+                        return Err(GroupErr::UserHasBeenForbid.into());
                     }
                     let mut model = ugr.into_active_model();
                     model.forbid = Set(true.into());
                     model.update(&app_state.db).await?;
-                    Ok(AppRes::success(()))
+                    Ok(())
                 }
             }
         }
@@ -460,12 +447,10 @@ async fn un_forbid(
     token: Token,
 ) -> Res<()> {
     match Group::find_by_id(gid).one(&app_state.db).await? {
-        None => Err(ServerError::from(GroupErr::GroupNotExist(gid))),
+        None => Err(GroupErr::GroupNotExist(gid).into()),
         Some(group) => {
             if group.admin != token.id {
-                return Err(ServerError::from(GroupErr::CommonErr(
-                    "您不是群管理员，不能设置禁言".to_string(),
-                )));
+                return Err(GroupErr::YouAreNotAdmin.into());
             }
             match UserGroupRel::find()
                 .filter(user_group_rel::Column::GroupId.eq(gid))
@@ -473,20 +458,15 @@ async fn un_forbid(
                 .one(&app_state.db)
                 .await?
             {
-                None => Err(ServerError::from(GroupErr::UserNotInGroup {
-                    uid: token.id,
-                    gid,
-                })),
+                None => Err(GroupErr::UserNotInGroup { uid: token.id, gid }.into()),
                 Some(ugr) => {
                     if ugr.forbid == false {
-                        return Ok(AppRes::success_with_msg(
-                            "用户未禁言，无需解除禁言".to_string(),
-                        ));
+                        return Err(GroupErr::UserWasNotForbid.into());
                     }
                     let mut model = ugr.into_active_model();
                     model.forbid = Set(false.into());
                     model.update(&app_state.db).await?;
-                    Ok(AppRes::success(()))
+                    Ok(())
                 }
             }
         }
@@ -501,23 +481,19 @@ pub(crate) async fn get_user_by_gid(
     user::get_by_ids(uids, &app_state).await
 }
 
+
 async fn send(
     State(app_state): State<AppState>,
     Path(gid): Path<i32>,
     token: Token,
     ValidatedJson(msg): ValidatedJson<SendMsgReq>,
-) -> Res<i64> {
+) -> Res<String> {
     let s = check_group_status(gid, token.id, &app_state).await?;
     if !s.in_group {
-        return Err(ServerError::from(GroupErr::UserNotInGroup {
-            uid: token.id,
-            gid,
-        }));
+        return Err(GroupErr::UserNotInGroup { uid: token.id, gid }.into());
     };
     if s.forbid {
-        return Err(ServerError::from(GroupErr::CommonErr(
-            "您已被禁言，无权发言".to_string(),
-        )));
+        return Err(GroupErr::YouAreForbid.into());
     }
     let payload = msg.build_payload(token.id, MessageTarget::Group(MessageTargetGroup { gid }));
     let mid = message::send_msg(payload, &app_state).await?;
@@ -531,7 +507,7 @@ async fn send(
         },
     )
     .await?;
-    Ok(AppRes::success(mid))
+    Ok(mid.to_string())
 }
 
 pub(crate) async fn get_by_gids(gids: Vec<i32>, app_state: &AppState) -> Result<Vec<Model>, DbErr> {
@@ -555,15 +531,12 @@ pub(crate) async fn history(
     State(app_state): State<AppState>,
     token: Token,
     Path(gid): Path<i32>,
-) -> Res<Vec<GroupHistoryMsg>> {
+) -> Res<Json<Vec<GroupHistoryMsg>>> {
     if !check_group_status(gid, token.id, &app_state)
         .await?
         .in_group
     {
-        return Err(ServerError::from(GroupErr::UserNotInGroup {
-            uid: token.id,
-            gid,
-        }));
+        return Err(GroupErr::UserNotInGroup { uid: token.id, gid }.into());
     }
     let mut history_msg = message::get_history_msg(
         &app_state,
@@ -585,19 +558,17 @@ pub(crate) async fn history(
         .iter()
         .map(|x| (x.id, x.name.clone()))
         .collect::<HashMap<i32, String>>();
-    Ok(AppRes::success(
-        history_msg
-            .into_iter()
-            .map(|x| GroupHistoryMsg {
-                mid: x.mid,
-                msg: x.payload.detail.get_content(),
-                time: x.payload.created_at,
-                from_uid: x.payload.from_uid,
-                name_of_from_uid: from_uid_2_name
-                    .get(&x.payload.from_uid)
-                    .unwrap_or(&"未知用户".to_string())
-                    .to_string(),
-            })
-            .collect(),
-    ))
+    Ok(Json(history_msg
+        .into_iter()
+        .map(|x| GroupHistoryMsg {
+            mid: x.mid,
+            msg: x.payload.detail.get_content(),
+            time: x.payload.created_at,
+            from_uid: x.payload.from_uid,
+            name_of_from_uid: from_uid_2_name
+                .get(&x.payload.from_uid)
+                .unwrap_or(&"未知用户".to_string())
+                .to_string(),
+        })
+        .collect()))
 }

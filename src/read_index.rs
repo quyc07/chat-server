@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::err::ServerError;
-use crate::{group, message, middleware, Api, AppRes, Res};
+use crate::{group, message, middleware, Api, Res};
 use axum::extract::State;
 use axum::routing::put;
 use axum::{Json, Router};
@@ -37,7 +37,7 @@ async fn read_index(
     Json(read_index): Json<UpdateReadIndex>,
 ) -> Res<()> {
     set_read_index(&app_state, token.id, read_index).await?;
-    Ok(AppRes::success(()))
+    Ok(())
 }
 
 pub(crate) async fn set_read_index(

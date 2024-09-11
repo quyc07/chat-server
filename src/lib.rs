@@ -114,7 +114,7 @@ const SUCCESS_MESSAGE: &str = "操作成功";
 const FAIL_CODE: i8 = 1;
 const SUCCESS_CODE: i8 = 0;
 
-type Res<T> = Result<AppRes<T>, ServerError>;
+type Res<T> = Result<T, ServerError>;
 
 impl<T: Serialize> AppRes<T> {
     pub fn success(data: T) -> AppRes<T> {
