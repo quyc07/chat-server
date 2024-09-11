@@ -296,7 +296,7 @@ async fn user_history(
                 time: x.payload.created_at,
                 from_uid: x.payload.from_uid,
             })
-            .sorted_by(|x1, x2| x2.time.cmp(&x1.time))
+            .sorted_by(|x1, x2| x1.time.cmp(&x2.time))
             .collect(),
     ))
 }
