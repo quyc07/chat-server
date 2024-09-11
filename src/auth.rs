@@ -7,12 +7,12 @@ use std::time::Duration;
 use crate::app_state::AppState;
 use crate::err::{ErrPrint, ServerError};
 use crate::validate::ValidatedJson;
-use crate::{middleware, user, Api, AppRes, Res};
+use crate::{middleware, user, Api, Res};
 use axum::extract::{FromRequest, FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::routing::{delete, post};
-use axum::Router;
 use axum::{async_trait, RequestPartsExt};
+use axum::{Json, Router};
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
@@ -110,7 +110,7 @@ impl ErrPrint for AuthError {}
 
 impl From<AuthError> for String {
     fn from(err: AuthError) -> Self {
-        AppRes::fail_with_msg(err.to_string()).into()
+        err.to_string()
     }
 }
 
@@ -144,10 +144,11 @@ struct UserLoginRes {
     access_token_expires: DateTime<Local>,
 }
 
+
 async fn login(
     State(app_state): State<AppState>,
     ValidatedJson(req): ValidatedJson<UserLoginReq>,
-) -> Res<UserLoginRes> {
+) -> Res<Json<UserLoginRes>> {
     let user = match user::find_by_name(&app_state, &req.name).await? {
         None => return Err(ServerError::from(AuthError::UserNotExist)),
         Some(user) => {
@@ -163,7 +164,7 @@ async fn login(
     // 保存已登陆用户
     LOGIN_USER.insert(token.id, token).await;
     // Send the authorized token
-    Ok(AppRes::success(UserLoginRes {
+    Ok(Json(UserLoginRes {
         access_token,
         access_token_expires: expire().await,
     }))
@@ -172,7 +173,7 @@ async fn login(
 async fn logout(token: Token) -> Res<()> {
     // 删除已登陆用户
     LOGIN_USER.remove(&token.id).await;
-    Ok(AppRes::success(()))
+    Ok(())
 }
 
 async fn renew(token: Token) -> Res<String> {
@@ -183,7 +184,7 @@ async fn renew(token: Token) -> Res<String> {
     let access_token = gen_token(&token).await?;
     // 刷新已登陆用户token
     LOGIN_USER.insert(token.id, token).await;
-    Ok(AppRes::success(access_token))
+    Ok(access_token)
 }
 
 const SECOND_TO_EXPIRED: u64 = 10;
@@ -242,7 +243,7 @@ mod test {
         let token = Token {
             id: 0,
             name: "name".to_string(),
-            email: "email".to_string(),
+            email: Some("email".to_string()),
             phone: None,
             dgraph_uid: Default::default(),
             role: Default::default(),

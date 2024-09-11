@@ -3,7 +3,7 @@ use std::option::Option;
 
 use axum::extract::{Path, State};
 use axum::routing::{get, patch, post};
-use axum::Router;
+use axum::{Json, Router};
 use chrono::{DateTime, Local};
 use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
@@ -22,14 +22,14 @@ use crate::auth::Token;
 use crate::datetime::datetime_format;
 use crate::datetime::opt_datetime_format;
 use crate::err::{ErrPrint, ServerError};
-use crate::friend::FriendRegister;
+use crate::friend::{FriendErr, FriendRegister};
 use crate::message::{
     ChatMessage, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget, MessageTargetUser,
     SendMsgReq,
 };
 use crate::read_index::UpdateReadIndex;
 use crate::validate::ValidatedJson;
-use crate::{auth, datetime, friend, group, message, middleware, AppRes, Res};
+use crate::{auth, datetime, friend, group, message, middleware, Res};
 use crate::{read_index, Api};
 use entity::prelude::User;
 use entity::sea_orm_active_enums::UserStatus;
@@ -124,10 +124,10 @@ impl ErrPrint for UserErr {}
 async fn register(
     State(app_state): State<AppState>,
     ValidatedJson(req): ValidatedJson<UserRegisterReq>,
-) -> Res<i32> {
+) -> Res<String> {
     let name = req.name.as_str();
     if find_by_name(&app_state, name).await?.is_some() {
-        return Err(ServerError::from(UserErr::UserNameExist(name.to_string())));
+        return Err(UserErr::UserNameExist(name.to_string()).into());
     }
     // save db
     let mut user = user::ActiveModel {
@@ -153,7 +153,7 @@ async fn register(
     let mut user = user.into_active_model();
     user.dgraph_uid = Set(dgraph_uid);
     let user = user.update(&app_state.db).await?;
-    Ok(AppRes::success(user.id))
+    Ok(user.id.to_string())
 }
 
 /// The User Detail.
@@ -213,18 +213,19 @@ impl From<user::Model> for UserDetail {
     ),
 )]
 /// 向好友发送消息
+
 async fn send(
     State(app_state): State<AppState>,
     Path(uid): Path<i32>,
     token: Token,
     // 按照参数定义的先后顺序进行解析，ValidatedJson会消耗掉Request，因此要放在最后面解析
     ValidatedJson(msg): ValidatedJson<SendMsgReq>,
-) -> Res<i64> {
+) -> Res<String> {
     // 校验好友状态
     check_status(uid, token.id, &app_state).await?;
     // 判断是否是好友
     if !friend::is_friend(token.dgraph_uid, uid).await {
-        return Err(ServerError::from(friend::FriendErr::NotFriend(uid)));
+        return Err(FriendErr::NotFriend(uid).into());
     }
     let payload = msg.build_payload(token.id, MessageTarget::User(MessageTargetUser { uid }));
     let mid = message::send_msg(payload, &app_state).await?;
@@ -238,7 +239,7 @@ async fn send(
         },
     )
     .await?;
-    Ok(AppRes::success(mid))
+    Ok(mid.to_string())
 }
 
 /// 历史聊天记录
@@ -271,9 +272,9 @@ async fn user_history(
     State(app_state): State<AppState>,
     Path(uid): Path<i32>,
     token: Token,
-) -> Res<Vec<UserHistoryMsg>> {
+) -> Res<Json<Vec<UserHistoryMsg>>> {
     if !friend::is_friend(token.dgraph_uid, uid).await {
-        return Err(ServerError::from(friend::FriendErr::NotFriend(uid)));
+        return Err(FriendErr::NotFriend(uid).into());
     }
     let mut history_msg = message::get_history_msg(
         &app_state,
@@ -286,7 +287,7 @@ async fn user_history(
             },
         }),
     );
-    Ok(AppRes::success(
+    Ok(Json(
         history_msg
             .into_iter()
             .map(|x| UserHistoryMsg {
@@ -371,7 +372,7 @@ async fn history(
     State(app_state): State<AppState>,
     Path(limit): Path<u64>,
     token: Token,
-) -> Res<Vec<ChatVo>> {
+) -> Res<Json<Vec<ChatVo>>> {
     let ris = entity::read_index::Entity::find()
         .filter(entity::read_index::Column::Uid.eq(token.id))
         .limit(limit)
@@ -488,7 +489,7 @@ async fn history(
         .chain(chat_of_group)
         .collect::<Vec<ChatVo>>();
     history.sort_by(|x1, x2| x2.get_msg_time().cmp(&x1.get_msg_time()));
-    Ok(AppRes::success(history))
+    Ok(Json(history))
 }
 
 pub async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<user::Model>, DbErr> {
@@ -543,7 +544,7 @@ async fn password(
     ValidatedJson(req): ValidatedJson<PasswordReq>,
 ) -> Res<()> {
     match User::find_by_id(token.id).one(&app_state.db).await? {
-        None => Err(ServerError::from(UserErr::UserNotExist(token.id))),
+        None => Err(UserErr::UserNotExist(token.id).into()),
         Some(user) => {
             // 修改密码
             let mut user = user.into_active_model();
@@ -551,7 +552,7 @@ async fn password(
             user.update(&app_state.db).await?;
             // 删除登陆状态
             auth::delete_login_status(token.id).await;
-            Ok(AppRes::success(()))
+            Ok(())
         }
     }
 }
@@ -563,12 +564,10 @@ pub(crate) async fn check_status(
     app_state: &AppState,
 ) -> Result<(), ServerError> {
     match User::find_by_id(uid).one(&app_state.db).await? {
-        None => Err(ServerError::from(UserErr::UserNotExist(uid))),
+        None => Err(UserErr::UserNotExist(uid).into()),
         Some(user) => match user.status {
-            UserStatus::Freeze if login_uid != uid => {
-                Err(ServerError::from(UserErr::UserWasFreeze(user.name)))
-            }
-            UserStatus::Freeze => Err(ServerError::from(UserErr::LoginUserWasFreeze)),
+            UserStatus::Freeze if login_uid != uid => Err(UserErr::UserWasFreeze(user.name).into()),
+            UserStatus::Freeze => Err(UserErr::LoginUserWasFreeze.into()),
             UserStatus::Normal => Ok(()),
         },
     }
@@ -590,17 +589,17 @@ async fn detail(
     State(app_state): State<AppState>,
     Path(name): Path<String>,
     token: Token,
-) -> Res<UserDetail> {
+) -> Res<Json<UserDetail>> {
     match User::find()
         .filter(user::Column::Name.eq(name.clone()))
         .one(&app_state.db)
         .await?
     {
-        None => Err(ServerError::from(UserErr::UserNameNotExist(name))),
+        None => Err(UserErr::UserNameNotExist(name).into()),
         Some(user) => {
             let mut detail = UserDetail::from(user);
             detail.is_friend = friend::is_friend(detail.dgraph_uid.clone(), token.id).await;
-            Ok(AppRes::success(detail))
+            Ok(Json(detail))
         }
     }
 }

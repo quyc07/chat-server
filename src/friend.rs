@@ -5,7 +5,7 @@ use crate::auth::Token;
 use crate::datetime::datetime_format;
 use crate::err::{ErrPrint, ServerError};
 use crate::friend::dgraph::{FriendVo, Location, Point};
-use crate::{datetime, middleware, user, Api, AppRes, Res};
+use crate::{datetime, middleware, user, Api, Res};
 use axum::extract::{Path, State};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
@@ -51,6 +51,10 @@ pub(crate) enum FriendErr {
     /// 不能批准好友请求
     #[error("您不是该好友请求的目标对象，无权批准")]
     CanNotReviewFriendRequest,
+    #[error("已经是好友，无需再次申请")]
+    AlreadyFriend,
+    #[error("请求等待中，请勿再次发起")]
+    RequestWaiting,
 }
 
 impl ErrPrint for FriendErr {}
@@ -70,9 +74,7 @@ async fn request(
     user::check_status(friend_id, token.id, &app_state).await?;
     // 1. 若两者已是好友，则直接返回
     if dgraph::is_friend(token.dgraph_uid, friend_id).await? {
-        return Ok(AppRes::success_with_msg(
-            "已经是好友，无需再次申请".to_string(),
-        ));
+        return Err(FriendErr::AlreadyFriend.into());
     }
     // 2. 查看是否已有请求记录
     match FriendRequest::find()
@@ -84,20 +86,16 @@ async fn request(
         // 3. 存在
         Some(req) => match req.status {
             // 3.1 若状态是已通过，则直接返回
-            FriendRequestStatus::APPROVE => Ok(AppRes::success_with_msg(
-                "已经是好友，无需再次申请".to_string(),
-            )),
+            FriendRequestStatus::APPROVE => Err(FriendErr::AlreadyFriend.into()),
             // 3.2 若状态是等待，则直接返回
-            FriendRequestStatus::WAIT => Ok(AppRes::success_with_msg(
-                "请求等待中，请勿再次发起".to_string(),
-            )),
+            FriendRequestStatus::WAIT => Err(FriendErr::RequestWaiting.into()),
             // 3.3 若状态是拒绝，则修改状态是等待
             FriendRequestStatus::REJECT => {
                 let mut req = req.into_active_model();
                 req.status = Set(FriendRequestStatus::WAIT);
                 req.reason = Set(reason);
                 req.update(&app_state.db).await?;
-                Ok(AppRes::success(()))
+                Ok(())
             }
         },
         // 4. 若不存在，则创建请求记录
@@ -113,7 +111,7 @@ async fn request(
             }
             .insert(&app_state.db)
             .await?;
-            Ok(AppRes::success(()))
+            Ok(())
         }
     }
 }
@@ -129,7 +127,7 @@ struct FriendReqVo {
     status: FriendRequestStatus,
 }
 
-async fn req_list(State(app_state): State<AppState>, token: Token) -> Res<Vec<FriendReqVo>> {
+async fn req_list(State(app_state): State<AppState>, token: Token) -> Res<Json<Vec<FriendReqVo>>> {
     let reqs = FriendRequest::find()
         .filter(friend_request::Column::TargetId.eq(token.id))
         .all(&app_state.db)
@@ -139,7 +137,7 @@ async fn req_list(State(app_state): State<AppState>, token: Token) -> Res<Vec<Fr
         .iter()
         .map(|user| (user.id, user.name.clone()))
         .collect::<HashMap<i32, String>>();
-    Ok(AppRes::success(
+    Ok(Json(
         reqs.iter()
             .map(|req| FriendReqVo {
                 id: req.id,
@@ -169,10 +167,10 @@ async fn review(
 ) -> Res<()> {
     // 1. 更新db状态
     match FriendRequest::find_by_id(req.id).one(&app_state.db).await? {
-        None => Ok(AppRes::success(())),
+        None => Ok(()),
         Some(fr) => {
             if fr.target_id != token.id {
-                return Err(ServerError::from(FriendErr::CanNotReviewFriendRequest));
+                return Err(FriendErr::CanNotReviewFriendRequest.into());
             }
             let mut fr = fr.into_active_model();
             fr.status = Set(req.status);
@@ -184,9 +182,7 @@ async fn review(
             let target_user = user::get_by_id(fr.target_id, &app_state)
                 .await?
                 .ok_or(user::UserErr::UserNotExist(fr.target_id))?;
-            Ok(AppRes::success(
-                dgraph::set_friend_ship(request_user.dgraph_uid, target_user.dgraph_uid).await?,
-            ))
+            Ok(dgraph::set_friend_ship(request_user.dgraph_uid, target_user.dgraph_uid).await?)
         }
     }
 }
@@ -198,12 +194,12 @@ struct Friend {
 }
 
 /// 好友列表
-async fn list(token: Token) -> Res<Vec<Friend>> {
+async fn list(token: Token) -> Res<Json<Vec<Friend>>> {
     match dgraph::get_friends(token.dgraph_uid.as_str()).await? {
-        None => Ok(AppRes::success(vec![])),
+        None => Ok(Json(vec![])),
         Some(res) => match res.friend {
-            None => Ok(AppRes::success(vec![])),
-            Some(friends) => Ok(AppRes::success(
+            None => Ok(Json(vec![])),
+            Some(friends) => Ok(Json(
                 friends
                     .iter()
                     .map(|friend| Friend {
@@ -248,15 +244,15 @@ async fn set_loc(token: Token, Json(loc): Json<Loc>) -> Res<()> {
         }),
     )
     .await?;
-    Ok(AppRes::success(()))
+    Ok(())
 }
 
-async fn nearby(token: Token, Path(radius): Path<i32>) -> Res<Vec<FriendVo>> {
+async fn nearby(token: Token, Path(radius): Path<i32>) -> Res<Json<Vec<FriendVo>>> {
     if let Some(friends) = dgraph::get_friends(token.dgraph_uid.as_str()).await? {
         if let Some(loc) = friends.loc {
             match loc.r#type.as_str() {
                 "Point" => {
-                    return Ok(AppRes::success(
+                    return Ok(Json(
                         dgraph::nearby(
                             Location::Point(Point {
                                 long: loc.coordinates[0],
@@ -275,5 +271,5 @@ async fn nearby(token: Token, Path(radius): Path<i32>) -> Res<Vec<FriendVo>> {
             }
         }
     }
-    Ok(AppRes::success(vec![]))
+    Ok(Json(vec![]))
 }

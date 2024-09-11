@@ -33,9 +33,9 @@ pub async fn register(fr: FriendRegister) -> Result<String, ServerError> {
                 None => Err(ServerError::CustomErr("fail to set user".to_string())),
                 Some(uid) => Ok(uid.clone()),
             },
-            Err(err) => Err(ServerError::from(err)),
+            Err(err) => Err(err.into()),
         },
-        Err(err) => Err(ServerError::from(err)),
+        Err(err) => Err(err.into()),
     }
 }
 

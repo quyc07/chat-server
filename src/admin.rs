@@ -1,11 +1,11 @@
 use crate::app_state::AppState;
 use crate::auth::Token;
-use crate::{middleware, Api, AppRes, Res};
+use crate::{middleware, Api, Res};
 use axum::extract::State;
 use axum::routing::get;
-use axum::Router;
+use axum::{Json, Router};
 use entity::prelude::User;
-use entity::user;
+use entity::user::Model;
 use sea_orm::EntityTrait;
 
 pub struct AdminApi;
@@ -22,6 +22,6 @@ impl Api for AdminApi {
     }
 }
 
-async fn all(State(app_state): State<AppState>, _: Token) -> Res<Vec<user::Model>> {
-    Ok(AppRes::success(User::find().all(&app_state.db).await?))
+async fn all(State(app_state): State<AppState>, _: Token) -> Res<Json<Vec<Model>>> {
+    Ok(Json(User::find().all(&app_state.db).await?))
 }
