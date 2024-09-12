@@ -1,13 +1,13 @@
-use std::collections::BTreeSet;
-use std::sync::Arc;
-
 use crate::app_state::AppState;
+use crate::datetime::datetime_format;
 use crate::err::ServerError;
 use crate::event::BroadcastEvent;
 use crate::group;
 use chrono::{DateTime, Local};
 use futures::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::sync::Arc;
 use utoipa::ToSchema;
 use validator::Validate;
 
@@ -16,6 +16,7 @@ pub struct ChatMessagePayload {
     /// Sender id
     pub from_uid: i32,
 
+    #[serde(with = "datetime_format")]
     /// The create time of the message.
     pub created_at: DateTime<Local>,
 

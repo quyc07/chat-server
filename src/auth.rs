@@ -144,7 +144,6 @@ struct UserLoginRes {
     access_token_expires: DateTime<Local>,
 }
 
-
 async fn login(
     State(app_state): State<AppState>,
     ValidatedJson(req): ValidatedJson<UserLoginReq>,
@@ -187,7 +186,7 @@ async fn renew(token: Token) -> Res<String> {
     Ok(access_token)
 }
 
-const SECOND_TO_EXPIRED: u64 = 10;
+const SECOND_TO_EXPIRED: u64 = 60 * 5;
 fn expire_timestamp() -> i64 {
     Local::now()
         .add(Duration::from_secs(SECOND_TO_EXPIRED))

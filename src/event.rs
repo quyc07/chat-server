@@ -1,3 +1,4 @@
+use crate::datetime::datetime_format;
 use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
@@ -81,10 +82,7 @@ async fn event_loop(
                     Ok(event) => {
                         match &*event{
                             BroadcastEvent::Chat{ targets,message } => {
-                                if !targets.contains(&current_uid) {
-                                    continue;
-                                }
-                                if message.payload.from_uid == current_uid {
+                                if !targets.contains(&current_uid) && message.payload.from_uid != current_uid{
                                     continue;
                                 }
                                 let chat = Message::ChatMessage(message.clone());
@@ -132,6 +130,7 @@ impl Display for Message {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HeartbeatMessage {
+    #[serde(with = "datetime_format")]
     time: DateTime<Local>,
 }
 
