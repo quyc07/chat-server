@@ -73,7 +73,7 @@ async fn event_loop(
 ) {
     let mut heartbeat = tokio::time::interval_at(
         Instant::now() + Duration::from_secs(5),
-        Duration::from_secs(15),
+        Duration::from_secs(60),
     );
     loop {
         tokio::select! {

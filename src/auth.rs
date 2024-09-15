@@ -10,7 +10,7 @@ use crate::validate::ValidatedJson;
 use crate::{middleware, user, Api, Res};
 use axum::extract::{FromRequest, FromRequestParts, State};
 use axum::http::request::Parts;
-use axum::routing::{delete, post};
+use axum::routing::{delete, patch, post};
 use axum::{async_trait, RequestPartsExt};
 use axum::{Json, Router};
 use axum_extra::headers::authorization::Bearer;
@@ -120,7 +120,7 @@ impl Api for TokenApi {
     fn route(app_state: AppState) -> Router {
         Router::new()
             .route("/logout", delete(logout))
-            .route("/renew", post(renew))
+            .route("/renew", patch(renew))
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 middleware::check_login,
@@ -193,15 +193,15 @@ fn expire_timestamp() -> i64 {
         .timestamp()
 }
 
-pub async fn expire() -> DateTime<Local> {
+async fn expire() -> DateTime<Local> {
     Local::now().add(Duration::from_secs(SECOND_TO_EXPIRED))
 }
 
-pub async fn gen_token(token: &Token) -> Result<String, AuthError> {
+async fn gen_token(token: &Token) -> Result<String, AuthError> {
     encode(&Header::default(), token, &KEYS.encoding).map_err(|_| AuthError::TokenCreation)
 }
 
-pub async fn parse_token(token: &str) -> Result<TokenData<Token>, AuthError> {
+async fn parse_token(token: &str) -> Result<TokenData<Token>, AuthError> {
     let mut validation = Validation::default();
     // 修改leeway=0，让exp校验使用绝对时间，参考Validation.leeway的使用
     validation.leeway = 0;
