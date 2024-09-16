@@ -115,7 +115,7 @@ impl<'a> Messages<'a> {
         Ok(self
             .db
             .db
-            .range(key_dm_msg(from_uid, to_uid, after)..key_dm_msg(from_uid, to_uid, i64::MAX))
+            .range(key_dm_msg(from_uid, to_uid, after + 1)..key_dm_msg(from_uid, to_uid, i64::MAX))
             .count())
     }
 
