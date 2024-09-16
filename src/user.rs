@@ -324,7 +324,7 @@ enum ChatVo {
         #[serde(with = "datetime_format")]
         msg_time: DateTime<Local>,
         /// unread message count
-        unread: Option<usize>,
+        unread: Option<String>,
     },
     /// GroupChat
     Group {
@@ -344,7 +344,7 @@ enum ChatVo {
         #[serde(with = "datetime_format")]
         msg_time: DateTime<Local>,
         /// unread message count
-        unread: Option<usize>,
+        unread: Option<String>,
     },
 }
 

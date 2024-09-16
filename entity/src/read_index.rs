@@ -10,7 +10,7 @@ pub struct Model {
     pub uid: i32,
     pub target_uid: Option<i32>,
     pub target_gid: Option<i32>,
-    pub mid: i64,
+    pub mid: Option<i64>,
     pub latest_mid: i64,
     pub uid_of_latest_msg: i32,
 }

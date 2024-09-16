@@ -7,6 +7,7 @@ use chrono::{DateTime, Local};
 use futures::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::fmt;
 use std::sync::Arc;
 use utoipa::ToSchema;
 use validator::Validate;
@@ -256,33 +257,61 @@ pub(crate) fn get_by_mids(mids: Vec<i64>, app_state: &AppState) -> Vec<ChatMessa
 }
 
 /// 查询群未读消息数量
-pub(crate) fn count_group_unread(gid: i32, mid: i64, app_state: &AppState) -> Option<usize> {
-    match app_state
-        .msg_db
-        .lock()
-        .unwrap()
-        .messages()
-        .count_group_messages_after(gid as i64, mid)
-    {
-        Ok(count) if count > 0 => Some(count),
-        _ => None,
+pub(crate) fn count_group_unread(
+    gid: i32,
+    mid: Option<i64>,
+    app_state: &AppState,
+) -> Option<UnRead> {
+    match mid {
+        None => Some(UnRead::ALL),
+        Some(mid) => {
+            match app_state
+                .msg_db
+                .lock()
+                .unwrap()
+                .messages()
+                .count_group_messages_after(gid as i64, mid)
+            {
+                Ok(count) if count > 0 => Some(UnRead::Part(count)),
+                _ => None,
+            }
+        }
     }
 }
+
+pub(crate) enum UnRead {
+    ALL,
+    Part(usize),
+}
+
+// 为UnRead实现Display
+impl fmt::Display for UnRead {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UnRead::ALL => write!(f, "all"),
+            UnRead::Part(count) => write!(f, "{}", count),
+        }
+    }
+}
+
 /// 查询单聊未读消息数量
 pub(crate) fn count_dm_unread(
     from_uid: i32,
     to_uid: i32,
-    mid: i64,
+    mid: Option<i64>,
     app_state: &AppState,
-) -> Option<usize> {
-    match app_state
-        .msg_db
-        .lock()
-        .unwrap()
-        .messages()
-        .count_dm_messages_after(from_uid as i64, to_uid as i64, mid)
-    {
-        Ok(count) if count > 0 => Some(count),
-        _ => None,
+) -> Option<UnRead> {
+    match mid {
+        None => Some(UnRead::ALL),
+        Some(mid) => match app_state
+            .msg_db
+            .lock()
+            .unwrap()
+            .messages()
+            .count_dm_messages_after(from_uid as i64, to_uid as i64, mid)
+        {
+            Ok(count) if count > 0 => Some(UnRead::Part(count)),
+            _ => None,
+        },
     }
 }

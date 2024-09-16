@@ -52,7 +52,7 @@ pub(crate) async fn set_read_index(
                 uid: Set(uid),
                 target_uid: Set(Some(target_uid)),
                 target_gid: NotSet,
-                mid: Set(mid),
+                mid: Set(Some(mid)),
                 latest_mid: Set(mid),
                 uid_of_latest_msg: Set(uid),
             };
@@ -79,7 +79,7 @@ pub(crate) async fn set_read_index(
                 uid: Set(target_uid),
                 target_uid: Set(Some(uid)),
                 target_gid: Default::default(),
-                mid: NotSet,
+                mid: Set(None),
                 latest_mid: Set(mid),
                 uid_of_latest_msg: Set(uid),
             };
@@ -104,7 +104,7 @@ pub(crate) async fn set_read_index(
                 uid: Set(uid),
                 target_uid: NotSet,
                 target_gid: Set(Some(target_gid)),
-                mid: Set(mid),
+                mid: Set(Some(mid)),
                 latest_mid: Set(mid),
                 uid_of_latest_msg: Set(uid),
             };
@@ -132,7 +132,7 @@ pub(crate) async fn set_read_index(
                         uid: Set(rest_uid_of_group),
                         target_uid: NotSet,
                         target_gid: Set(Some(target_gid)),
-                        mid: NotSet,
+                        mid: Set(None),
                         latest_mid: Set(mid),
                         uid_of_latest_msg: Set(uid),
                     };
@@ -156,10 +156,14 @@ pub(crate) async fn set_read_index(
     })
 }
 
-pub(crate) fn count_unread_msg(ri: &Model, app_state: &AppState) -> Option<usize> {
+pub(crate) fn count_unread_msg(ri: &Model, app_state: &AppState) -> Option<String> {
     match (ri.target_uid, ri.target_gid) {
-        (Some(target_uid), None) => message::count_dm_unread(ri.uid, target_uid, ri.mid, app_state),
-        (None, Some(target_gid)) => message::count_group_unread(target_gid, ri.mid, app_state),
+        (Some(target_uid), None) => {
+            message::count_dm_unread(ri.uid, target_uid, ri.mid, app_state).map(|c| c.to_string())
+        }
+        (None, Some(target_gid)) => {
+            message::count_group_unread(target_gid, ri.mid, app_state).map(|c| c.to_string())
+        }
         _ => None,
     }
 }
