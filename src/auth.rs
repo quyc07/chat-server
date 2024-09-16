@@ -181,7 +181,8 @@ async fn renew(token: Token) -> Res<String> {
         ..token
     };
     let access_token = gen_token(&token).await?;
-    // 刷新已登陆用户token
+    // 刷新已登陆用户token，并更新缓存时间
+    LOGIN_USER.remove(&token.id).await;
     LOGIN_USER.insert(token.id, token).await;
     Ok(access_token)
 }
