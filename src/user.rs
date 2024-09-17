@@ -7,10 +7,7 @@ use axum::{Json, Router};
 use chrono::{DateTime, Local};
 use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
-use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter,
-    QuerySelect,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter, QuerySelect};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
@@ -164,7 +161,7 @@ async fn register(
         phone: Set(req.phone.clone()),
         create_time: Default::default(),
         update_time: Default::default(),
-        status: ActiveValue::NotSet,
+        status: Default::default(),
         dgraph_uid: Default::default(),
         role: Default::default(),
     };

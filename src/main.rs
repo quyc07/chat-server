@@ -28,9 +28,9 @@ async fn main() {
     info!("chat server start begin!");
     let app_state = AppState::new().await.unwrap();
     // 数据初始化
-    // Migrator::up(&app_state.db, None)
-    //     .await
-    //     .expect("fail to apply migrations");
+    Migrator::up(&app_state.db, None)
+        .await
+        .expect("fail to apply migrations");
     let app = Router::new()
         .merge(swagger_ui().await)
         .route("/", get(|| async { "Hello, World!" }))

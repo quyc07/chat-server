@@ -7,10 +7,7 @@ use axum::{Json, Router};
 use chrono::{DateTime, Local};
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use sea_orm::ActiveValue::Set;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter,
-    TransactionTrait,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_stream::StreamExt as OtherStreamExt;
