@@ -62,6 +62,7 @@ impl Api for UserApi {
             ))
             .route("/:uid/history", get(user_history))
             .route("/history/:limit", get(history))
+            .route("/find/:name", get(find_friend))
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 middleware::check_login,
@@ -69,6 +70,31 @@ impl Api for UserApi {
             .route("/register", post(register))
             .with_state(app_state.clone())
     }
+}
+
+#[derive(Serialize)]
+struct FindFriendRes {
+    id: i32,
+    name: String,
+}
+
+async fn find_friend(
+    State(app_state): State<AppState>,
+    Path(name): Path<String>,
+) -> Res<Json<Vec<FindFriendRes>>> {
+    let result = User::find()
+        .filter(user::Column::Name.like(format!("%{name}%")))
+        .all(&app_state.db)
+        .await?;
+    Ok(Json(
+        result
+            .into_iter()
+            .map(|model| FindFriendRes {
+                id: model.id,
+                name: model.name,
+            })
+            .collect(),
+    ))
 }
 
 /// Register New User
