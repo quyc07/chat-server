@@ -13,6 +13,7 @@ use chrono::{DateTime, Local};
 use entity::friend_request;
 use entity::prelude::FriendRequest;
 use entity::sea_orm_active_enums::FriendRequestStatus;
+use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter};
 use serde::{Deserialize, Serialize};
@@ -139,6 +140,7 @@ async fn req_list(State(app_state): State<AppState>, token: Token) -> Res<Json<V
         .collect::<HashMap<i32, String>>();
     Ok(Json(
         reqs.iter()
+            .sorted_by(|a, b| b.create_time.cmp(&a.create_time))
             .map(|req| FriendReqVo {
                 id: req.id,
                 request_id: req.request_id,

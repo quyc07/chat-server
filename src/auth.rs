@@ -175,6 +175,7 @@ async fn logout(token: Token) -> Res<()> {
     Ok(())
 }
 
+// FIXME 续期存在bug，待修复
 async fn renew(token: Token) -> Res<String> {
     let token = Token {
         exp: expire_timestamp(),
@@ -187,7 +188,7 @@ async fn renew(token: Token) -> Res<String> {
     Ok(access_token)
 }
 
-const SECOND_TO_EXPIRED: u64 = 60 * 5;
+const SECOND_TO_EXPIRED: u64 = 60 * 60;
 fn expire_timestamp() -> i64 {
     Local::now()
         .add(Duration::from_secs(SECOND_TO_EXPIRED))
