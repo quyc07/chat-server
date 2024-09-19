@@ -5,14 +5,27 @@ use reqwest::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::env;
+use std::fmt::{Display, Formatter};
 use std::string::ToString;
+use std::sync::LazyLock;
 
-const DGRAPH_URL: &str = "http://localhost:8080";
+static DGRAPH_URL: DgraphUrl = DgraphUrl(LazyLock::new(|| {
+    env::var("DGRAPH_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
+}));
+
+struct DgraphUrl(LazyLock<String>);
+
+impl Display for DgraphUrl {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.to_string())
+    }
+}
 
 pub async fn register(fr: FriendRegister) -> Result<String, ServerError> {
     let client = reqwest::Client::new();
     // 直接提交事务 参考：https://dgraph.io/docs/dql/clients/raw-http/#committing-the-transaction
-    let url = format!("{}/mutate?commitNow=true", DGRAPH_URL);
+    let url = format!("{DGRAPH_URL}/mutate?commitNow=true");
     let value = json!({
         "set":[
             {
@@ -195,7 +208,7 @@ pub(crate) struct GetFriendRes {
 
 pub async fn get_friends(dgraph_uid: &str) -> Result<Option<GetFriendRes>, Error> {
     let client = Client::new();
-    let url = format!("{}/query", DGRAPH_URL);
+    let url = format!("{DGRAPH_URL}/query");
     let value = "
     {
         user(func: uid("

@@ -48,7 +48,7 @@ pub(crate) async fn set_read_index(
     Ok(match read_index {
         UpdateReadIndex::User { target_uid, mid } => {
             let active_model = ActiveModel {
-                id: Set(Default::default()),
+                id: Default::default(),
                 uid: Set(uid),
                 target_uid: Set(Some(target_uid)),
                 target_gid: NotSet,
@@ -75,7 +75,7 @@ pub(crate) async fn set_read_index(
                 // do nothing
             }
             let active_model = ActiveModel {
-                id: Set(Default::default()),
+                id: Default::default(),
                 uid: Set(target_uid),
                 target_uid: Set(Some(uid)),
                 target_gid: Default::default(),
@@ -100,7 +100,7 @@ pub(crate) async fn set_read_index(
         }
         UpdateReadIndex::Group { target_gid, mid } => {
             let active_model = ActiveModel {
-                id: Set(Default::default()),
+                id: Default::default(),
                 uid: Set(uid),
                 target_uid: NotSet,
                 target_gid: Set(Some(target_gid)),
@@ -128,7 +128,7 @@ pub(crate) async fn set_read_index(
                 .into_iter()
                 .map(|rest_uid_of_group| {
                     return ActiveModel {
-                        id: Set(Default::default()),
+                        id: Default::default(),
                         uid: Set(rest_uid_of_group),
                         target_uid: NotSet,
                         target_gid: Set(Some(target_gid)),
