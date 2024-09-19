@@ -7,6 +7,11 @@ services:
       - "9080:9080"
     volumes:
       - ./volume/dgraph:/graph
+  ratel:
+    image: dgraph/ratel:latest
+    container_name: ratel
+    ports:
+      - "8000:8000"
   chat-server:
     image: chat-server:1.0
     container_name: chat-server
