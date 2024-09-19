@@ -1,10 +1,15 @@
-FROM rust:latest as builder
+FROM rust:alpine AS builder
+RUN apk add -q --no-cache build-base openssl-dev curl
+ENV RUSTFLAGS="-C target-feature=-crt-static"
 WORKDIR /usr/src/chat-server
 COPY . .
-RUN cargo install --path .
+RUN cargo build --release
 
-FROM debian:bullseye-slim
-# TODO 无法获取 extra-runtime-dependencies
-RUN apt-get update && apt-get install -y extra-runtime-dependencies && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /usr/local/cargo/bin/chat-server /usr/local/bin/chat-server
-CMD ["chat-server"]
+# 使用Alpine作为最终镜像
+FROM alpine:latest
+RUN apk add -q --no-cache libgcc curl
+WORKDIR /app
+# 复制构建的二进制文件
+COPY --from=builder /usr/src/chat-server/target/release/chat-server /app/
+CMD ["./chat-server"]
+

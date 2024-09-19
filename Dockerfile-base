@@ -1,8 +1,0 @@
-FROM rust:latest
-
-WORKDIR /usr/src/chat-server
-COPY . .
-
-RUN cargo install --path .
-
-CMD ["chat-server"]

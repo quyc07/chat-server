@@ -1,6 +1,5 @@
 services:
   dgraph:
-    # docker run -it -p 8080:8080 -p 9080:9080 -v ~/dgraph:/dgraph dgraph/standalone:latest
     image: dgraph/dgraph:latest
     container_name: dgraph
     ports:
@@ -13,3 +12,5 @@ services:
     container_name: chat-server
     ports:
       - "3000:3000"
+    volumes:
+      - ./volume/data:/app/data

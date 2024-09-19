@@ -18,7 +18,6 @@ use chat_server::open_api::swagger_ui;
 use chat_server::read_index::ReadIndexApi;
 use chat_server::user::UserApi;
 use chat_server::{log, Api};
-use entity::sea_orm_active_enums::Role::Admin;
 use migration::{Migrator, MigratorTrait};
 
 #[tokio::main]
