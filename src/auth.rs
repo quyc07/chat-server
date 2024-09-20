@@ -230,14 +230,14 @@ mod test {
     use std::thread::sleep;
     use std::time::Duration;
 
+    use crate::auth::{AuthError, Token, KEYS};
     use chrono::{DateTime, Local};
+    use entity::sea_orm_active_enums::Role;
     use hmac::{Hmac, Mac};
     use jsonwebtoken::{decode, encode, Header, Validation};
     use jwt::{SignWithKey, VerifyWithKey};
     use serde::{Deserialize, Serialize};
     use sha2::Sha256;
-
-    use crate::auth::{AuthError, Token, KEYS};
 
     #[test]
     fn test_token() {
@@ -247,7 +247,7 @@ mod test {
             email: Some("email".to_string()),
             phone: None,
             dgraph_uid: Default::default(),
-            role: Default::default(),
+            role: Role::Admin,
             exp: Local::now().add(Duration::from_secs(3)).timestamp(),
         };
 

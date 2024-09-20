@@ -40,6 +40,12 @@ CREATE TABLE IF NOT EXISTS "read_index"
     uid_of_latest_msg integer not null
 );
 
+create unique index read_index_uid_target_gid_uindex
+    on read_index (uid, target_gid);
+
+create unique index read_index_uid_target_uid_uindex
+    on read_index (uid, target_uid);
+
 CREATE TABLE IF NOT EXISTS "user"
 (
     id          integer                               not null
