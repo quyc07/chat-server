@@ -19,3 +19,5 @@ services:
       - "3000:3000"
     volumes:
       - ./volume/data:/app/data
+    environment:
+      - DGRAPH_URL=http://localhost:8080
