@@ -9,6 +9,7 @@ use axum::Router;
 use serde::Serialize;
 use utoipa::ToSchema;
 
+pub mod admin;
 pub mod app_state;
 pub mod auth;
 pub mod datetime;
@@ -23,7 +24,6 @@ pub mod open_api;
 pub mod read_index;
 pub mod user;
 pub mod validate;
-pub mod admin;
 
 pub trait Api {
     fn route(app_state: AppState) -> Router;
@@ -75,13 +75,13 @@ pub struct CheckRouter {
 
 impl CheckRouter {
     pub fn route(&self) -> Router {
-        let need_login = match self.need_login.clone() {
-            None => None,
-            Some(router) => Some(router.route_layer(axum::middleware::from_fn_with_state(
+        let need_login = self.need_login.clone().map(|router| {
+            router.route_layer(axum::middleware::from_fn_with_state(
                 self.app_state.clone(),
                 middleware::check_user_status,
-            ))),
-        };
+            ))
+        });
+
         match (need_login, self.not_need_login.clone()) {
             (Some(need_login_router), Some(not_need_login_router)) => {
                 need_login_router.merge(not_need_login_router)
@@ -102,7 +102,7 @@ impl CheckRouter {
 pub struct AppJson<T>(pub T);
 
 // TODO 去除该无用封装，直接返回data
-#[derive(Serialize,ToSchema)]
+#[derive(Serialize, ToSchema)]
 pub struct AppRes<T: Serialize> {
     code: i8,
     msg: String,

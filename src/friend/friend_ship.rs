@@ -47,7 +47,6 @@ pub(crate) struct FriendVo {
     pub name: String,
 }
 
-
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub(crate) struct GetFriendRes {
     pub user_id: i32,

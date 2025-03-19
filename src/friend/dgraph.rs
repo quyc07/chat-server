@@ -9,19 +9,19 @@
 // use std::fmt::{Display, Formatter};
 // use std::string::ToString;
 // use std::sync::LazyLock;
-// 
+//
 // static DGRAPH_URL: DgraphUrl = DgraphUrl(LazyLock::new(|| {
 //     env::var("DGRAPH_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
 // }));
-// 
+//
 // struct DgraphUrl(LazyLock<String>);
-// 
+//
 // impl Display for DgraphUrl {
 //     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
 //         write!(f, "{}", self.0.to_string())
 //     }
 // }
-// 
+//
 // pub async fn register(fr: FriendRegister) -> Result<String, ServerError> {
 //     let client = reqwest::Client::new();
 //     // 直接提交事务 参考：https://dgraph.io/docs/dql/clients/raw-http/#committing-the-transaction
@@ -51,12 +51,12 @@
 //         Err(err) => Err(err.into()),
 //     }
 // }
-// 
+//
 // #[derive(Debug, Serialize, Deserialize, Clone)]
 // struct Uid {
 //     uid: String,
 // }
-// 
+//
 // /// {
 // ///     "code": "Success",
 // ///     "message": "Done",
@@ -71,20 +71,20 @@
 //     message: String,
 //     uids: T,
 // }
-// 
+//
 // #[derive(Debug, Deserialize, Serialize)]
 // struct UserData<T> {
 //     user: Vec<T>,
 // }
-// 
+//
 // #[derive(Debug, Deserialize, Serialize)]
 // struct DgraphRes<T> {
 //     data: T,
 //     extensions: Extensions,
 // }
-// 
+//
 // impl ErrPrint for Error {}
-// 
+//
 // /// 建立好友关系
 // pub async fn set_friend_ship(uid_1: String, uid_2: String) -> Result<(), ServerError> {
 //     let client = Client::new();
@@ -103,7 +103,7 @@
 //     commit(txn).await?;
 //     Ok(())
 // }
-// 
+//
 // /// 提交dgraph的事务
 // async fn commit(txn: Txn) -> Result<(), ServerError> {
 //     let client = Client::new();
@@ -124,7 +124,7 @@
 //         .await?;
 //     Ok(())
 // }
-// 
+//
 // async fn do_set_friend_ship(
 //     set_friend_ship: SetFriendShip,
 //     client: Client,
@@ -139,23 +139,23 @@
 //         .await?;
 //     Ok(res.extensions.txn)
 // }
-// 
+//
 // #[derive(Serialize, Deserialize)]
 // struct Subject {
 //     pub uid: String,
 // }
-// 
+//
 // #[derive(Serialize, Deserialize)]
 // struct Object {
 //     pub uid: String,
 //     pub friend: Vec<Subject>,
 // }
-// 
+//
 // #[derive(Serialize, Deserialize)]
 // struct SetFriendShip {
 //     pub set: Vec<Object>,
 // }
-// 
+//
 // impl SetFriendShip {
 //     fn new(object_id: String, subject_id: String) -> Self {
 //         SetFriendShip {
@@ -166,7 +166,7 @@
 //         }
 //     }
 // }
-// 
+//
 // /// 查询用户好友关系
 // /// {
 // ///   user(func: uid("0x4e37")) {
@@ -189,14 +189,14 @@
 //             .is_some(),
 //     })
 // }
-// 
+//
 // // #[derive(Clone, Serialize, Deserialize, Debug)]
 // // pub(crate) struct FriendVo {
 // //     pub uid: String,
 // //     pub user_id: i32,
 // //     pub name: String,
 // // }
-// 
+//
 // // #[derive(Clone, Serialize, Deserialize, Debug)]
 // // pub(crate) struct GetFriendRes {
 // //     pub uid: String,
@@ -205,7 +205,7 @@
 // //     pub loc: Option<Loc>,
 // //     pub friend: Option<Vec<FriendVo>>,
 // // }
-// 
+//
 // pub async fn get_friends(dgraph_uid: &str) -> Result<Option<GetFriendRes>, Error> {
 //     let client = Client::new();
 //     let url = format!("{DGRAPH_URL}/query");
@@ -237,12 +237,12 @@
 //     let res = res.json::<DgraphRes<UserData<GetFriendRes>>>().await?;
 //     Ok(res.data.user.first().map(|t| t.clone()))
 // }
-// 
+//
 // #[cfg(test)]
 // mod test {
 //     use crate::friend::dgraph::{DgraphRes, GetFriendRes, UserData};
 //     use serde_json::json;
-// 
+//
 //     #[test]
 //     fn test() {
 //         let value = json!({
@@ -282,7 +282,7 @@
 //         println!("{:?}", result)
 //     }
 // }
-// 
+//
 // #[derive(Serialize, Deserialize, Debug)]
 // struct Txn {
 //     pub start_ts: i64,
@@ -290,7 +290,7 @@
 //     pub keys: Option<Vec<String>>,
 //     pub preds: Option<Vec<String>>,
 // }
-// 
+//
 // #[derive(Serialize, Deserialize, Debug)]
 // struct ServerLatency {
 //     pub parsing_ns: i64,
@@ -298,26 +298,26 @@
 //     pub assign_timestamp_ns: Option<i64>,
 //     pub total_ns: i64,
 // }
-// 
+//
 // #[derive(Serialize, Deserialize, Debug)]
 // struct Extensions {
 //     pub server_latency: ServerLatency,
 //     pub txn: Txn,
 // }
-// 
+//
 // #[derive(Serialize, Deserialize, Clone, Debug)]
 // pub struct Loc {
 //     #[serde(rename = "type")]
 //     pub r#type: String,
 //     pub coordinates: Vec<f64>,
 // }
-// 
+//
 // #[derive(Serialize, Deserialize)]
 // struct SetLoc {
 //     pub uid: String,
 //     pub loc: Loc,
 // }
-// 
+//
 // #[derive(Serialize, Deserialize)]
 // struct Mutate<T> {
 //     pub set: Vec<T>,
@@ -355,7 +355,7 @@
 //         .await?;
 //     Ok(())
 // }
-// 
+//
 // #[derive(Debug, Deserialize, Serialize)]
 // struct NearByData<T> {
 //     nearby: Vec<T>,

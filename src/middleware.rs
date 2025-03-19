@@ -16,8 +16,7 @@ pub(crate) async fn check_user_status(
     if let Err(err) = user::check_status(token.id, token.id, &state).await {
         return err.into_response();
     }
-    let response = next.run(request).await;
-    response
+    next.run(request).await
 }
 
 // 校验token有效期
@@ -25,8 +24,7 @@ pub(crate) async fn check_login(token: Token, request: Request, next: Next) -> R
     if let Err(err) = auth::check_token_expire(token).await {
         return ServerError::from(err).into_response();
     }
-    let response = next.run(request).await;
-    response
+    next.run(request).await
 }
 
 pub(crate) async fn check_admin(token: Token, request: Request, next: Next) -> Response {

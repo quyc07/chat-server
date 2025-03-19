@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::ops::Add;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -8,7 +7,7 @@ use crate::app_state::AppState;
 use crate::err::{ErrPrint, ServerError};
 use crate::validate::ValidatedJson;
 use crate::{middleware, user, Api, Res};
-use axum::extract::{FromRequest, FromRequestParts, State};
+use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::routing::{delete, patch, post};
 use axum::{async_trait, RequestPartsExt};
@@ -20,18 +19,17 @@ use chrono::{DateTime, Local};
 use entity::sea_orm_active_enums::Role;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use moka::future::Cache;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 use validator::Validate;
 
-const KEYS: LazyLock<Keys, fn() -> Keys> = LazyLock::new(|| {
+static KEYS: LazyLock<Keys, fn() -> Keys> = LazyLock::new(|| {
     let secret = std::env::var("JWT_SECRET").unwrap_or("abc".to_string());
     Keys::new(secret.as_bytes())
 });
 
-/// 当前已登陆用户集合，替换成moka 缓存
+// 当前已登陆用户集合，替换成moka 缓存
 // static LOGIN_USER: Lazy<Arc<Mutex<HashMap<i32, Token>>>> =
 //     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 

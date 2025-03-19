@@ -5,12 +5,14 @@ use axum::extract::{Path, State};
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Local};
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use sea_orm::ActiveValue::Set;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, TransactionTrait};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter,
+    TransactionTrait,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio_stream::StreamExt as OtherStreamExt;
 use utoipa::{OpenApi, ToSchema};
 use validator::Validate;
 
@@ -369,7 +371,7 @@ async fn detail(
 }
 
 pub(crate) async fn get_uids(app_state: &AppState, gid: i32) -> Result<Vec<i32>, DbErr> {
-    Ok(get_rels(&app_state, gid)
+    Ok(get_rels(app_state, gid)
         .await?
         .into_iter()
         .map(|ugr| ugr.user_id)
@@ -425,11 +427,11 @@ async fn forbid(
             {
                 None => Err(GroupErr::UserNotInGroup { uid: token.id, gid }.into()),
                 Some(ugr) => {
-                    if ugr.forbid == true {
+                    if ugr.forbid {
                         return Err(GroupErr::UserHasBeenForbid.into());
                     }
                     let mut model = ugr.into_active_model();
-                    model.forbid = Set(true.into());
+                    model.forbid = Set(true);
                     model.update(&app_state.db).await?;
                     Ok(())
                 }
@@ -457,11 +459,11 @@ async fn un_forbid(
             {
                 None => Err(GroupErr::UserNotInGroup { uid: token.id, gid }.into()),
                 Some(ugr) => {
-                    if ugr.forbid == false {
+                    if !ugr.forbid {
                         return Err(GroupErr::UserWasNotForbid.into());
                     }
                     let mut model = ugr.into_active_model();
-                    model.forbid = Set(false.into());
+                    model.forbid = Set(false);
                     model.update(&app_state.db).await?;
                     Ok(())
                 }
@@ -477,7 +479,6 @@ pub(crate) async fn get_user_by_gid(
     let uids = get_uids(&app_state, gid).await?;
     user::get_by_ids(uids, &app_state).await
 }
-
 
 async fn send(
     State(app_state): State<AppState>,
@@ -515,7 +516,7 @@ pub(crate) async fn get_by_gids(gids: Vec<i32>, app_state: &AppState) -> Result<
 }
 
 #[derive(Serialize)]
-struct GroupHistoryMsg {
+pub(crate) struct GroupHistoryMsg {
     mid: i64,
     msg: String,
     #[serde(with = "datetime_format")]
@@ -555,17 +556,19 @@ pub(crate) async fn history(
         .iter()
         .map(|x| (x.id, x.name.clone()))
         .collect::<HashMap<i32, String>>();
-    Ok(Json(history_msg
-        .into_iter()
-        .map(|x| GroupHistoryMsg {
-            mid: x.mid,
-            msg: x.payload.detail.get_content(),
-            time: x.payload.created_at,
-            from_uid: x.payload.from_uid,
-            name_of_from_uid: from_uid_2_name
-                .get(&x.payload.from_uid)
-                .unwrap_or(&"未知用户".to_string())
-                .to_string(),
-        })
-        .collect()))
+    Ok(Json(
+        history_msg
+            .into_iter()
+            .map(|x| GroupHistoryMsg {
+                mid: x.mid,
+                msg: x.payload.detail.get_content(),
+                time: x.payload.created_at,
+                from_uid: x.payload.from_uid,
+                name_of_from_uid: from_uid_2_name
+                    .get(&x.payload.from_uid)
+                    .unwrap_or(&"未知用户".to_string())
+                    .to_string(),
+            })
+            .collect(),
+    ))
 }

@@ -1,12 +1,7 @@
-use std::time::Duration;
-
 use axum::routing::get;
 use axum::Router;
-use moka::future::Cache;
 use tokio::net::TcpListener;
-use tracing::{error, info};
-use utoipa::OpenApi;
-use utoipa_swagger_ui::{SwaggerUi, Url};
+use tracing::info;
 
 use chat_server::admin::AdminApi;
 use chat_server::app_state::AppState;

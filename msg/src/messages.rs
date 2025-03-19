@@ -6,7 +6,7 @@ pub struct Messages<'a> {
     pub(crate) db: &'a MsgDb,
 }
 
-impl<'a> Messages<'a> {
+impl Messages<'_> {
     pub fn get(&self, mid: i64) -> Result<Option<Vec<u8>>> {
         Ok(self.db.db.get(key_msg(mid))?.map(|data| data.to_vec()))
     }

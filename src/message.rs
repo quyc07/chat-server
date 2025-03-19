@@ -4,7 +4,6 @@ use crate::err::ServerError;
 use crate::event::BroadcastEvent;
 use crate::group;
 use chrono::{DateTime, Local};
-use futures::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
@@ -149,7 +148,7 @@ pub(crate) async fn send_msg(
             mid
         }
         MessageTarget::Group(MessageTargetGroup { gid }) => {
-            let uids = group::get_uids(&app_state, gid).await?;
+            let uids = group::get_uids(app_state, gid).await?;
             let mid = app_state.msg_db.lock().unwrap().messages().send_to_group(
                 gid as i64,
                 uids.iter().map(|&x| i64::from(x)).collect::<Vec<i64>>(),
@@ -263,7 +262,7 @@ pub(crate) fn count_group_unread(
     app_state: &AppState,
 ) -> Option<UnRead> {
     match mid {
-        None => Some(UnRead::ALL),
+        None => Some(UnRead::All),
         Some(mid) => {
             match app_state
                 .msg_db
@@ -280,7 +279,7 @@ pub(crate) fn count_group_unread(
 }
 
 pub(crate) enum UnRead {
-    ALL,
+    All,
     Part(usize),
 }
 
@@ -288,7 +287,7 @@ pub(crate) enum UnRead {
 impl fmt::Display for UnRead {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            UnRead::ALL => write!(f, "all"),
+            UnRead::All => write!(f, "all"),
             UnRead::Part(count) => write!(f, "{}", count),
         }
     }
@@ -302,7 +301,7 @@ pub(crate) fn count_dm_unread(
     app_state: &AppState,
 ) -> Option<UnRead> {
     match mid {
-        None => Some(UnRead::ALL),
+        None => Some(UnRead::All),
         Some(mid) => match app_state
             .msg_db
             .lock()

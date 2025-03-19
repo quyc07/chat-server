@@ -24,21 +24,15 @@ serde_html_form = "0.2.4"
 tokio = { version = "1.35.1", features = ["full"] }
 tokio-stream = "0.1.14"
 futures = "0.3.30"
-toml = "0.8.8"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "local-time"] }
 tracing-appender = "0.2.3"
 tower-http = { version = "0.5.0", features = ["fs"] }
 color-eyre = "0.6"
-fastrand = "2.0.1"
 chrono = "0.4.31"
 sea-orm = { version = "1.0.0", features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros", "debug-print"] }
-bytes = "1.5.0"
 itertools = "0.13.0"
 utoipa = { version = "4", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "7.1.0", features = ["axum"] }
-log = "0.4.20"
 moka = { version = "0.12.8", features = ["future"] }
-time = "0.3.36"
-reqwest = { version = "0.12.5", features = ["json"] }
 tower = "0.5.0"

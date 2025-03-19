@@ -13,7 +13,6 @@ use crate::auth::AuthError;
 use crate::friend::FriendErr;
 use crate::group::GroupErr;
 use crate::user::UserErr;
-use crate::{friend, AppRes};
 
 #[derive(Debug, Error, ToSchema)]
 pub enum ServerError {
@@ -98,7 +97,9 @@ impl IntoResponse for ServerError {
                     GroupErr::YouAreNotAdmin => {
                         (StatusCode::FORBIDDEN, err.to_string()).into_response()
                     }
-                    GroupErr::YouAreForbid => (StatusCode::FORBIDDEN, err.to_string()).into_response(),
+                    GroupErr::YouAreForbid => {
+                        (StatusCode::FORBIDDEN, err.to_string()).into_response()
+                    }
                 }
             }
             ServerError::AuthErr(err) => {

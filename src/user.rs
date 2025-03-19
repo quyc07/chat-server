@@ -168,7 +168,7 @@ async fn register(
         role: Default::default(),
     };
     let user = user.insert(&app_state.db).await?;
-    let mut user = user.into_active_model();
+    let user = user.into_active_model();
     let user = user.update(&app_state.db).await?;
     Ok(user.id.to_string())
 }
@@ -207,9 +207,7 @@ impl From<user::Model> for UserDetail {
             email: value.email,
             phone: value.phone,
             create_time: datetime::native_datetime_2_datetime(value.create_time),
-            update_time: value
-                .update_time
-                .map(|t| datetime::native_datetime_2_datetime(t)),
+            update_time: value.update_time.map(datetime::native_datetime_2_datetime),
             status: value.status.into(),
             dgraph_uid: value.dgraph_uid,
             is_friend: false,
@@ -229,8 +227,8 @@ impl From<user::Model> for UserDetail {
         (status = 401, description = "Friend was freeze", body = FriendErr),
     ),
 )]
-/// 向好友发送消息
 
+/// 向好友发送消息
 async fn send(
     State(app_state): State<AppState>,
     Path(uid): Path<i32>,
@@ -402,8 +400,7 @@ async fn history(
             (None, Some(_)) => Some((ChatTarget::Group, x)),
             _ => None,
         })
-        .into_iter()
-        .into_group_map_by(|(t, m)| t.clone())
+        .into_group_map_by(|(t, _m)| t.clone())
         .into_iter()
         .map(|(target, x)| {
             (
@@ -431,7 +428,7 @@ async fn history(
                 .map(|x| (x.mid, x))
                 .collect::<HashMap<i64, ChatMessage>>();
             ri_of_users
-                .into_iter()
+                .iter()
                 .map(|x| ChatVo::User {
                     uid: x.target_uid.unwrap(),
                     user_name: uid_2_name
@@ -475,7 +472,7 @@ async fn history(
                 .map(|x| (x.id, x.name))
                 .collect::<HashMap<i32, String>>();
             ris_of_group
-                .into_iter()
+                .iter()
                 .map(|x| ChatVo::Group {
                     gid: x.target_gid.unwrap(),
                     group_name: gid_2_name
@@ -505,7 +502,7 @@ async fn history(
         .into_iter()
         .chain(chat_of_group)
         .collect::<Vec<ChatVo>>();
-    history.sort_by(|x1, x2| x2.get_msg_time().cmp(&x1.get_msg_time()));
+    history.sort_by(|x1, x2| x2.get_msg_time().cmp(x1.get_msg_time()));
     Ok(Json(history))
 }
 
@@ -607,7 +604,7 @@ async fn detail(
         None => Err(UserErr::UserNameNotExist(name).into()),
         Some(user) => {
             let mut detail = UserDetail::from(user);
-            detail.is_friend = friend::is_friend(&app_state, detail.id.clone(), token.id).await;
+            detail.is_friend = friend::is_friend(&app_state, detail.id, token.id).await;
             Ok(Json(detail))
         }
     }

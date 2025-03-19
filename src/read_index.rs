@@ -45,7 +45,7 @@ pub(crate) async fn set_read_index(
     uid: i32,
     read_index: UpdateReadIndex,
 ) -> Result<(), ServerError> {
-    Ok(match read_index {
+    match read_index {
         UpdateReadIndex::User { target_uid, mid } => {
             let active_model = ActiveModel {
                 id: Default::default(),
@@ -126,16 +126,14 @@ pub(crate) async fn set_read_index(
             let ris = group::get_uids(app_state, target_gid)
                 .await?
                 .into_iter()
-                .map(|rest_uid_of_group| {
-                    return ActiveModel {
-                        id: Default::default(),
-                        uid: Set(rest_uid_of_group),
-                        target_uid: NotSet,
-                        target_gid: Set(Some(target_gid)),
-                        mid: Set(None),
-                        latest_mid: Set(mid),
-                        uid_of_latest_msg: Set(uid),
-                    };
+                .map(|rest_uid_of_group| ActiveModel {
+                    id: Default::default(),
+                    uid: Set(rest_uid_of_group),
+                    target_uid: NotSet,
+                    target_gid: Set(Some(target_gid)),
+                    mid: Set(None),
+                    latest_mid: Set(mid),
+                    uid_of_latest_msg: Set(uid),
                 })
                 .collect::<Vec<ActiveModel>>();
             read_index::Entity::insert_many(ris)
@@ -153,7 +151,8 @@ pub(crate) async fn set_read_index(
                 .exec(&app_state.db)
                 .await?;
         }
-    })
+    };
+    Ok(())
 }
 
 pub(crate) fn count_unread_msg(ri: &Model, app_state: &AppState) -> Option<String> {

@@ -46,7 +46,7 @@ impl Api for FriendApi {
 
 /// 好友相关错误
 #[derive(Debug, Error, ToSchema)]
-pub(crate) enum FriendErr {
+pub enum FriendErr {
     /// 用户不是您的好友
     #[error("用户{0}不是您的好友")]
     NotFriend(i32),
@@ -215,14 +215,8 @@ async fn list(State(app_state): State<AppState>, token: Token) -> Res<Json<Vec<F
     }
 }
 
-pub(crate) struct FriendRegister {
-    pub(crate) user_id: i32,
-    pub(crate) name: String,
-    pub(crate) phone: Option<String>,
-}
-
 pub(crate) async fn is_friend(app_state: &AppState, uid: i32, user_id: i32) -> bool {
-    friend_ship::is_friend(&app_state, uid, user_id)
+    friend_ship::is_friend(app_state, uid, user_id)
         .await
         .unwrap_or(false)
 }
