@@ -1,10 +1,11 @@
 mod dgraph;
+mod friend_ship;
 
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::datetime::datetime_format;
-use crate::err::{ErrPrint, ServerError};
-use crate::friend::dgraph::{FriendVo, Location, Point};
+use crate::err::ErrPrint;
+use crate::friend::friend_ship::{FriendVo, Location, Point};
 use crate::{datetime, middleware, user, Api, Res};
 use axum::extract::{Path, State};
 use axum::routing::{get, patch, post};
@@ -74,7 +75,7 @@ async fn request(
 ) -> Res<()> {
     user::check_status(friend_id, token.id, &app_state).await?;
     // 1. 若两者已是好友，则直接返回
-    if dgraph::is_friend(token.dgraph_uid, friend_id).await? {
+    if friend_ship::is_friend(&app_state, token.id, friend_id).await? {
         return Err(FriendErr::AlreadyFriend.into());
     }
     // 2. 查看是否已有请求记录
@@ -184,7 +185,7 @@ async fn review(
             let target_user = user::get_by_id(fr.target_id, &app_state)
                 .await?
                 .ok_or(user::UserErr::UserNotExist(fr.target_id))?;
-            Ok(dgraph::set_friend_ship(request_user.dgraph_uid, target_user.dgraph_uid).await?)
+            Ok(friend_ship::set_friend_ship(&app_state, request_user.id, target_user.id).await?)
         }
     }
 }
@@ -196,8 +197,8 @@ struct Friend {
 }
 
 /// 好友列表
-async fn list(token: Token) -> Res<Json<Vec<Friend>>> {
-    match dgraph::get_friends(token.dgraph_uid.as_str()).await? {
+async fn list(State(app_state): State<AppState>, token: Token) -> Res<Json<Vec<Friend>>> {
+    match friend_ship::get_friends(&app_state, token.id).await? {
         None => Ok(Json(vec![])),
         Some(res) => match res.friend {
             None => Ok(Json(vec![])),
@@ -220,12 +221,8 @@ pub(crate) struct FriendRegister {
     pub(crate) phone: Option<String>,
 }
 
-pub(crate) async fn register(fr: FriendRegister) -> Result<String, ServerError> {
-    dgraph::register(fr).await
-}
-
-pub(crate) async fn is_friend(object_graph_id: String, user_id: i32) -> bool {
-    dgraph::is_friend(object_graph_id, user_id)
+pub(crate) async fn is_friend(app_state: &AppState, uid: i32, user_id: i32) -> bool {
+    friend_ship::is_friend(&app_state, uid, user_id)
         .await
         .unwrap_or(false)
 }
@@ -237,9 +234,10 @@ struct Loc {
     // #[validate(length(min = 1))]
     latitude: f64,
 }
-async fn set_loc(token: Token, Json(loc): Json<Loc>) -> Res<()> {
-    dgraph::set_loc(
-        token.dgraph_uid,
+async fn set_loc(State(app_state): State<AppState>, token: Token, Json(loc): Json<Loc>) -> Res<()> {
+    friend_ship::set_loc(
+        &app_state,
+        token.id,
         Location::Point(Point {
             long: loc.longitude,
             lat: loc.latitude,
@@ -249,13 +247,18 @@ async fn set_loc(token: Token, Json(loc): Json<Loc>) -> Res<()> {
     Ok(())
 }
 
-async fn nearby(token: Token, Path(radius): Path<i32>) -> Res<Json<Vec<FriendVo>>> {
-    if let Some(friends) = dgraph::get_friends(token.dgraph_uid.as_str()).await? {
+async fn nearby(
+    State(app_state): State<AppState>,
+    token: Token,
+    Path(radius): Path<i32>,
+) -> Res<Json<Vec<FriendVo>>> {
+    if let Some(friends) = friend_ship::get_friends(&app_state, token.id).await? {
         if let Some(loc) = friends.loc {
             match loc.r#type.as_str() {
                 "Point" => {
                     return Ok(Json(
-                        dgraph::nearby(
+                        friend_ship::nearby(
+                            &app_state,
                             Location::Point(Point {
                                 long: loc.coordinates[0],
                                 lat: loc.coordinates[1],
@@ -263,7 +266,7 @@ async fn nearby(token: Token, Path(radius): Path<i32>) -> Res<Json<Vec<FriendVo>
                             radius,
                         )
                         .await?,
-                    ))
+                    ));
                 }
                 "Polygon" => {
                     todo!("待实现区域");

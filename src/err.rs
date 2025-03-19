@@ -36,8 +36,6 @@ pub enum ServerError {
     #[error(transparent)]
     IoErr(#[from] std::io::Error),
     #[error(transparent)]
-    ReqwestErr(#[from] reqwest::Error),
-    #[error(transparent)]
     FriendErr(#[from] FriendErr),
 }
 
@@ -138,10 +136,6 @@ impl IntoResponse for ServerError {
             ServerError::CustomErr(err) => {
                 err.print();
                 (StatusCode::INTERNAL_SERVER_ERROR,).into_response()
-            }
-            ServerError::ReqwestErr(err) => {
-                err.print();
-                (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
             }
             ServerError::FriendErr(err) => {
                 err.print();

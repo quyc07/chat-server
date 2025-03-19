@@ -212,7 +212,7 @@ async fn add(State(app_state): State<AppState>, Path(req): Path<AddReq>, _: Toke
     if !exist(req.gid, &app_state).await? {
         return Err(GroupErr::GroupNotExist(req.gid).into());
     }
-    if !user::exist(req.uid, &app_state).await? {
+    if user::get_by_id(req.uid, &app_state).await?.is_none() {
         return Err(UserErr::UserNotExist(req.uid).into());
     }
     if check_group_status(req.gid, req.uid, &app_state)
@@ -274,7 +274,7 @@ async fn remove(
     if !exist(req.gid, &app_state).await? {
         return Err(GroupErr::GroupNotExist(req.gid).into());
     }
-    if !user::exist(req.uid, &app_state).await? {
+    if user::get_by_id(req.uid, &app_state).await?.is_none() {
         return Err(UserErr::UserNotExist(req.uid).into());
     }
     if !check_group_status(req.gid, req.uid, &app_state)

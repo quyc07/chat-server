@@ -2,10 +2,11 @@
 
 pub mod prelude;
 
+pub mod group;
 pub mod sea_orm_active_enums;
 pub mod user;
-pub mod group;
 pub mod user_group_rel;
 
 pub mod friend_request;
+pub mod friend_ship;
 pub mod read_index;

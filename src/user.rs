@@ -7,7 +7,9 @@ use axum::{Json, Router};
 use chrono::{DateTime, Local};
 use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter, QuerySelect};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter, QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
@@ -19,7 +21,7 @@ use crate::auth::Token;
 use crate::datetime::datetime_format;
 use crate::datetime::opt_datetime_format;
 use crate::err::{ErrPrint, ServerError};
-use crate::friend::{FriendErr, FriendRegister};
+use crate::friend::FriendErr;
 use crate::message::{
     ChatMessage, HistoryMsgReq, HistoryMsgUser, HistoryReq, MessageTarget, MessageTargetUser,
     SendMsgReq,
@@ -153,7 +155,7 @@ async fn register(
         return Err(UserErr::UserNameExist(name.to_string()).into());
     }
     // save db
-    let mut user = user::ActiveModel {
+    let user = user::ActiveModel {
         id: Default::default(),
         name: Set(req.name.clone()),
         password: Set(req.password),
@@ -166,15 +168,7 @@ async fn register(
         role: Default::default(),
     };
     let user = user.insert(&app_state.db).await?;
-    // save dgraph, get dgraph_uid
-    let dgraph_uid = friend::register(FriendRegister {
-        user_id: user.id,
-        name: req.name,
-        phone: req.phone,
-    })
-    .await?;
     let mut user = user.into_active_model();
-    user.dgraph_uid = Set(dgraph_uid);
     let user = user.update(&app_state.db).await?;
     Ok(user.id.to_string())
 }
@@ -247,7 +241,7 @@ async fn send(
     // 校验好友状态
     check_status(uid, token.id, &app_state).await?;
     // 判断是否是好友
-    if !friend::is_friend(token.dgraph_uid, uid).await {
+    if !friend::is_friend(&app_state, token.id, uid).await {
         return Err(FriendErr::NotFriend(uid).into());
     }
     let payload = msg.build_payload(token.id, MessageTarget::User(MessageTargetUser { uid }));
@@ -296,10 +290,10 @@ async fn user_history(
     Path(uid): Path<i32>,
     token: Token,
 ) -> Res<Json<Vec<UserHistoryMsg>>> {
-    if !friend::is_friend(token.dgraph_uid, uid).await {
+    if !friend::is_friend(&app_state, token.id, uid).await {
         return Err(FriendErr::NotFriend(uid).into());
     }
-    let mut history_msg = message::get_history_msg(
+    let history_msg = message::get_history_msg(
         &app_state,
         HistoryMsgReq::User(HistoryMsgUser {
             from_id: token.id,
@@ -522,14 +516,6 @@ pub async fn find_by_name(app_state: &AppState, name: &str) -> Result<Option<use
         .await
 }
 
-pub async fn exist(uid: i32, app_state: &AppState) -> Result<bool, DbErr> {
-    User::find()
-        .filter(user::Column::Id.eq(uid))
-        .one(&app_state.db)
-        .await
-        .map(|t| t.is_some())
-}
-
 pub async fn get_by_ids(uids: Vec<i32>, app_state: &AppState) -> Result<Vec<user::Model>, DbErr> {
     User::find()
         .filter(user::Column::Id.is_in(uids))
@@ -621,7 +607,7 @@ async fn detail(
         None => Err(UserErr::UserNameNotExist(name).into()),
         Some(user) => {
             let mut detail = UserDetail::from(user);
-            detail.is_friend = friend::is_friend(detail.dgraph_uid.clone(), token.id).await;
+            detail.is_friend = friend::is_friend(&app_state, detail.id.clone(), token.id).await;
             Ok(Json(detail))
         }
     }
