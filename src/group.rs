@@ -60,7 +60,13 @@ impl Api for GroupApi {
             ))
             .route("/:gid", get(detail))
             .route("/", get(mine))
-            .route("/all", get(all))
+            .route(
+                "/all",
+                get(all).layer(axum::middleware::from_fn_with_state(
+                    app_state.clone(),
+                    middleware::check_admin,
+                )),
+            )
             .route("/:gid/history", get(history))
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
