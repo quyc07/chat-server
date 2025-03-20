@@ -106,25 +106,24 @@ impl IntoResponse for ServerError {
                 err.print();
                 match err {
                     AuthError::UserNotExist => {
-                        (StatusCode::NOT_FOUND, err.to_string()).into_response();
+                        (StatusCode::NOT_FOUND, err.to_string()).into_response()
                     }
                     AuthError::WrongCredentials => {
-                        (StatusCode::UNAUTHORIZED, err.to_string()).into_response();
+                        (StatusCode::UNAUTHORIZED, err.to_string()).into_response()
                     }
                     AuthError::MissingCredentials => {
-                        (StatusCode::UNAUTHORIZED, err.to_string()).into_response();
+                        (StatusCode::UNAUTHORIZED, err.to_string()).into_response()
                     }
                     AuthError::TokenCreation => {
-                        (StatusCode::UNAUTHORIZED, err.to_string()).into_response();
+                        (StatusCode::UNAUTHORIZED, err.to_string()).into_response()
                     }
                     AuthError::InvalidToken => {
-                        (StatusCode::UNAUTHORIZED, err.to_string()).into_response();
+                        (StatusCode::UNAUTHORIZED, err.to_string()).into_response()
                     }
                     AuthError::NeedAdmin => {
-                        (StatusCode::FORBIDDEN, err.to_string()).into_response();
+                        (StatusCode::FORBIDDEN, err.to_string()).into_response()
                     }
                 }
-                (StatusCode::UNAUTHORIZED, err.to_string()).into_response()
             }
             ServerError::MsgErr(err) => {
                 err.print();
