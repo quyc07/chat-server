@@ -28,7 +28,7 @@ use crate::message::{
 };
 use crate::read_index::UpdateReadIndex;
 use crate::validate::ValidatedJson;
-use crate::{auth, datetime, friend, group, message, middleware, Res};
+use crate::{auth, datetime, friend, group, message, middleware, PageReq, Res};
 use crate::{read_index, Api};
 use entity::prelude::User;
 use entity::sea_orm_active_enums::UserStatus;
@@ -60,7 +60,7 @@ impl Api for UserApi {
                 middleware::check_user_status,
             ))
             .route("/:uid/history", get(user_history))
-            .route("/history/:limit", get(history))
+            .route("/history", post(history))
             .route("/find/:name", get(find_friend))
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
@@ -385,12 +385,13 @@ impl ChatVo {
 /// 查询用户最近聊天列表
 async fn history(
     State(app_state): State<AppState>,
-    Path(limit): Path<u64>,
     token: Token,
+    ValidatedJson(page_req): ValidatedJson<PageReq>,
 ) -> Res<Json<Vec<ChatVo>>> {
     let ris = entity::read_index::Entity::find()
         .filter(entity::read_index::Column::Uid.eq(token.id))
-        .limit(limit)
+        .offset(page_req.offset())
+        .limit(page_req.limit)
         .all(&app_state.db)
         .await?;
     let map = ris
