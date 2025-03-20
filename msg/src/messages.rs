@@ -158,7 +158,7 @@ impl Messages<'_> {
         Ok(self
             .db
             .db
-            .range(key_group_msg(gid, after)..key_group_msg(gid, i64::MAX))
+            .range(key_group_msg(gid, after + 1)..key_group_msg(gid, i64::MAX))
             .count())
     }
 
