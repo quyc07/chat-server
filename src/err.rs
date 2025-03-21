@@ -6,7 +6,6 @@ use color_eyre::eyre::eyre;
 use sea_orm::DbErr;
 use thiserror::Error;
 use tracing::{error, warn};
-use utoipa::ToSchema;
 use validator::ValidationErrors;
 
 use crate::auth::AuthError;
@@ -14,11 +13,11 @@ use crate::friend::FriendErr;
 use crate::group::GroupErr;
 use crate::user::UserErr;
 
-#[derive(Debug, Error, ToSchema)]
+#[derive(Debug, Error)]
 pub enum ServerError {
     #[error("err: {0}")]
     CustomErr(String),
-    #[error(transparent)]
+    #[error("sss: {0}")]
     ValidationError(#[from] ValidationErrors),
     #[error(transparent)]
     AxumJsonRejection(#[from] JsonRejection),

@@ -1,6 +1,6 @@
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{FromRequest, Request};
-use axum::{async_trait, Json};
+use axum::Json;
 use serde::de::DeserializeOwned;
 use validator::Validate;
 
@@ -9,7 +9,6 @@ use crate::err::ServerError;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ValidatedJson<T>(pub T);
 
-#[async_trait]
 impl<T, S> FromRequest<S> for ValidatedJson<T>
 where
     T: DeserializeOwned + Validate,

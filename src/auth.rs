@@ -10,7 +10,7 @@ use crate::{middleware, user, Api, Res};
 use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::routing::{delete, patch, post};
-use axum::{async_trait, RequestPartsExt};
+use axum::RequestPartsExt;
 use axum::{Json, Router};
 use axum_extra::headers::authorization::Bearer;
 use axum_extra::headers::Authorization;
@@ -67,7 +67,6 @@ impl From<entity::user::Model> for Token {
     }
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for Token
 where
     S: Send + Sync,

@@ -27,8 +27,8 @@ pub struct FriendApi;
 impl Api for FriendApi {
     fn route(app_state: AppState) -> Router {
         Router::new()
-            .route("/loc/:radius", patch(set_loc).get(nearby))
-            .route("/req/:uid", post(request))
+            .route("/loc/{radius}", patch(set_loc).get(nearby))
+            .route("/req/{uid}", post(request))
             .route("/req", post(review))
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),

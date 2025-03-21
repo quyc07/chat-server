@@ -49,16 +49,16 @@ impl Api for GroupApi {
     fn route(app_state: AppState) -> Router {
         Router::new()
             .route("/", post(create))
-            .route("/:gid/:uid", put(add).delete(remove))
-            .route("/:gid", delete(delete_group))
-            .route("/:gid/send", put(send))
-            .route("/:gid/admin/:uid", patch(admin))
-            .route("/:gid/forbid/:uid", put(forbid).delete(un_forbid))
+            .route("/{gid}/{uid}", put(add).delete(remove))
+            .route("/{gid}", delete(delete_group))
+            .route("/{gid}/send", put(send))
+            .route("/{gid}/admin/{uid}", patch(admin))
+            .route("/{gid}/forbid/{uid}", put(forbid).delete(un_forbid))
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 middleware::check_user_status,
             ))
-            .route("/:gid", get(detail))
+            .route("/{gid}", get(detail))
             .route("/", get(mine))
             .route(
                 "/all",
@@ -67,7 +67,7 @@ impl Api for GroupApi {
                     middleware::check_admin,
                 )),
             )
-            .route("/:gid/history", get(history))
+            .route("/{gid}/history", get(history))
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 middleware::check_login,
@@ -118,7 +118,7 @@ impl From<Model> for GroupRes {
     get,
     path = "/group/all",
     responses(
-    (status = 200, description = "Get all groups", body = [AllRes]),
+    (status = 200, description = "Get all groups", body = Vec<GroupRes>),
     )
 )]
 async fn all(State(app_state): State<AppState>) -> Res<Json<Vec<GroupRes>>> {
@@ -130,7 +130,7 @@ async fn all(State(app_state): State<AppState>) -> Res<Json<Vec<GroupRes>>> {
     get,
     path = "/group/mine",
     responses(
-    (status = 200, description = "Get all groups", body = [AllRes]),
+    (status = 200, description = "Get all groups", body = Vec<GroupRes>),
     )
 )]
 async fn mine(State(app_state): State<AppState>, token: Token) -> Res<Json<Vec<GroupRes>>> {
@@ -176,7 +176,7 @@ struct CreateReq {
     path = "/group/create",
     request_body = CreateReq,
     responses(
-        (status = 200, description = "Create new group", body = [i32])
+        (status = 200, description = "Create new group", body = String)
     )
 )]
 
@@ -213,7 +213,7 @@ struct RemoveReq {
     put,
     path = "/:gid/add/:uid",
     responses(
-        (status = 200, description = "Add user to group", body = [()]),
+        (status = 200, description = "Add user to group", body = ())
     )
 )]
 async fn add(State(app_state): State<AppState>, Path(req): Path<AddReq>, _: Token) -> Res<()> {

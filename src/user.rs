@@ -52,16 +52,16 @@ pub struct UserApi;
 impl Api for UserApi {
     fn route(app_state: AppState) -> Router {
         Router::new()
-            .route("/:uid/send", post(send))
+            .route("/{uid}/send", post(send))
             .route("/password", patch(password))
-            .route("/:name", get(detail))
+            .route("/{name}", get(detail))
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 middleware::check_user_status,
             ))
-            .route("/:uid/history", get(user_history))
+            .route("/{uid}/history", get(user_history))
             .route("/history", post(history))
-            .route("/find/:name", get(find_friend))
+            .route("/find/{name}", get(find_friend))
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 middleware::check_login,
@@ -142,7 +142,7 @@ impl ErrPrint for UserErr {}
     path = "/user/register",
     request_body = UserRegisterReq,
     responses(
-        (status = 200, description = "Register User and return the User successfully", body = AppRes<i32> ),
+        (status = 200, description = "Register User and return the User successfully", body = i32),
         (status = 409, description = "UserName already exists", body = UserErr)
     )
 )]
@@ -379,7 +379,7 @@ impl ChatVo {
         ("limit" = u64, Path, description = "limit of chat list")
     ),
     responses(
-        (status = 200, description = "Get chat list successfully", body = ChatList),
+        (status = 200, description = "Get chat list successfully", body = Vec<ChatVo>),
     ),
 )]
 /// 查询用户最近聊天列表
