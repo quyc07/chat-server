@@ -6,6 +6,7 @@ use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Local};
 use futures::TryStreamExt;
+use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter,
@@ -575,6 +576,7 @@ pub(crate) async fn history(
                     .unwrap_or(&"未知用户".to_string())
                     .to_string(),
             })
+            .sorted_by_key(|m| m.time)
             .collect(),
     ))
 }

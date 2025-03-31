@@ -16,7 +16,6 @@ pub struct Model {
     pub create_time: DateTime,
     pub update_time: Option<DateTime>,
     pub status: UserStatus,
-    pub dgraph_uid: String,
     pub role: Role,
 }
 

@@ -6,6 +6,7 @@ use crate::auth::Token;
 use crate::datetime::datetime_format;
 use crate::err::ErrPrint;
 use crate::friend::friend_ship::{FriendVo, Location, Point};
+use crate::user::UserErr;
 use crate::{datetime, middleware, user, Api, Res};
 use axum::extract::{Path, State};
 use axum::routing::{get, patch, post};
@@ -181,10 +182,10 @@ async fn review(
             // 2. 建立dgraph好友关系
             let request_user = user::get_by_id(fr.request_id, &app_state)
                 .await?
-                .ok_or(user::UserErr::UserNotExist(fr.request_id))?;
+                .ok_or(UserErr::UserNotExist(fr.request_id))?;
             let target_user = user::get_by_id(fr.target_id, &app_state)
                 .await?
-                .ok_or(user::UserErr::UserNotExist(fr.target_id))?;
+                .ok_or(UserErr::UserNotExist(fr.target_id))?;
             Ok(friend_ship::set_friend_ship(&app_state, request_user.id, target_user.id).await?)
         }
     }

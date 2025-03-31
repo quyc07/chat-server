@@ -37,11 +37,11 @@ use entity::user;
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        register,send,user_history,password,detail,history
+        register, send, user_history, password, detail, history
     ),
     components(
-        schemas(UserRegisterReq,SendMsgReq,UserHistoryMsg,PasswordReq,
-        UserDetail,ChatVo,UserErr,friend::FriendErr)
+        schemas(UserRegisterReq, SendMsgReq, UserHistoryMsg, PasswordReq,
+            UserDetail, ChatVo, UserErr, friend::FriendErr)
     ),
     tags(
         (name = "user", description = "USER API")
@@ -164,7 +164,6 @@ async fn register(
         create_time: Default::default(),
         update_time: Default::default(),
         status: Default::default(),
-        dgraph_uid: Default::default(),
         role: Default::default(),
     };
     let user = user.insert(&app_state.db).await?;
@@ -193,8 +192,6 @@ struct UserDetail {
     pub update_time: Option<DateTime<Local>>,
     /// User status
     pub status: String,
-    /// dgraph uid
-    pub dgraph_uid: String,
     /// Is friend
     pub is_friend: bool,
 }
@@ -209,7 +206,6 @@ impl From<user::Model> for UserDetail {
             create_time: datetime::native_datetime_2_datetime(value.create_time),
             update_time: value.update_time.map(datetime::native_datetime_2_datetime),
             status: value.status.into(),
-            dgraph_uid: value.dgraph_uid,
             is_friend: false,
         }
     }
@@ -269,6 +265,8 @@ struct UserHistoryMsg {
     time: DateTime<Local>,
     /// 消息发送者id
     from_uid: i32,
+    /// 消息发送者name
+    from_name: String,
 }
 
 #[utoipa::path(
@@ -302,6 +300,9 @@ async fn user_history(
             },
         }),
     );
+    let user = get_by_id(uid, &app_state)
+        .await?
+        .ok_or(UserErr::UserNotExist(uid))?;
     Ok(Json(
         history_msg
             .into_iter()
@@ -310,6 +311,11 @@ async fn user_history(
                 msg: x.payload.detail.get_content(),
                 time: x.payload.created_at,
                 from_uid: x.payload.from_uid,
+                from_name: if x.payload.from_uid == token.id {
+                    token.name.clone()
+                } else {
+                    user.name.clone()
+                },
             })
             .sorted_by(|x1, x2| x1.time.cmp(&x2.time))
             .collect(),
@@ -539,7 +545,8 @@ struct PasswordReq {
 #[utoipa::path(
     post,
     path = "/password",
-    request_body(content = PasswordReq, description = "修改密码", content_type = "application/json"),
+    request_body(content = PasswordReq, description = "修改密码", content_type = "application/json"
+    ),
     responses(
         (status = 404, description = "用户不存在", content_type = "application/json", body = UserErr)
     ),

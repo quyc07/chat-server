@@ -47,7 +47,6 @@ pub struct Token {
     pub name: String,
     pub email: Option<String>,
     pub phone: Option<String>,
-    pub dgraph_uid: String,
     pub role: Role,
     // 失效时间，timestamp
     exp: i64,
@@ -60,7 +59,6 @@ impl From<entity::user::Model> for Token {
             name: value.name,
             email: value.email,
             phone: value.phone,
-            dgraph_uid: value.dgraph_uid,
             role: value.role,
             exp: expire_timestamp(),
         }
@@ -243,7 +241,6 @@ mod test {
             name: "name".to_string(),
             email: Some("email".to_string()),
             phone: None,
-            dgraph_uid: Default::default(),
             role: Role::Admin,
             exp: Local::now().add(Duration::from_secs(3)).timestamp(),
         };
