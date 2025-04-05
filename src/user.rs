@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::option::Option;
 
 use axum::extract::{Path, State};
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Local};
 use itertools::Itertools;
@@ -34,27 +34,16 @@ use entity::prelude::User;
 use entity::sea_orm_active_enums::UserStatus;
 use entity::user;
 
-#[derive(OpenApi)]
-#[openapi(
-    paths(
-        register, send, user_history, password, detail, history
-    ),
-    components(
-        schemas(UserRegisterReq, SendMsgReq, UserHistoryMsg, PasswordReq,
-            UserDetail, ChatVo, UserErr, friend::FriendErr)
-    ),
-    tags(
-        (name = "user", description = "USER API")
-    )
-)]
 pub struct UserApi;
 
 impl Api for UserApi {
     fn route(app_state: AppState) -> Router {
         Router::new()
-            .route("/{uid}/send", post(send))
+            .route("/detail/{uid}", get(detail_by_id))
+            .route("/{uid}/send", put(send))
             .route("/password", patch(password))
             .route("/{name}", get(detail))
+            .route("/search/{name}", get(search_by_name))
             .route_layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 middleware::check_user_status,
@@ -137,15 +126,6 @@ impl ErrPrint for UserErr {}
 /// Register User.
 ///
 /// Register User and return the User.
-#[utoipa::path(
-    post,
-    path = "/user/register",
-    request_body = UserRegisterReq,
-    responses(
-        (status = 200, description = "Register User and return the User successfully", body = i32),
-        (status = 409, description = "UserName already exists", body = UserErr)
-    )
-)]
 async fn register(
     State(app_state): State<AppState>,
     ValidatedJson(req): ValidatedJson<UserRegisterReq>,
@@ -211,19 +191,6 @@ impl From<user::Model> for UserDetail {
     }
 }
 
-#[utoipa::path(
-    post,
-    path = "/{uid}/send",
-    params(
-        ("uid" = i32, Path, description = "id of friend")
-    ),
-    request_body = SendMsgReq,
-    responses(
-        (status = 200, description = "Send message to user successfully"),
-        (status = 401, description = "Friend was freeze", body = FriendErr),
-    ),
-)]
-
 /// 向好友发送消息
 async fn send(
     State(app_state): State<AppState>,
@@ -269,17 +236,6 @@ struct UserHistoryMsg {
     from_name: String,
 }
 
-#[utoipa::path(
-    get,
-    path = "/{uid}/history",
-    params(
-        ("uid" = i32, Path, description = "id of friend")
-    ),
-    responses(
-        (status = 200, description = "Get history message successfully", body = [UserHistoryMsg]),
-        (status = 401, description = "Target user is not friend of you", body = FriendErr),
-    ),
-)]
 /// 查询与好友的聊天记录
 async fn user_history(
     State(app_state): State<AppState>,
@@ -378,16 +334,6 @@ impl ChatVo {
     }
 }
 
-#[utoipa::path(
-    get,
-    path = "/history",
-    params(
-        ("limit" = u64, Path, description = "limit of chat list")
-    ),
-    responses(
-        (status = 200, description = "Get chat list successfully", body = Vec<ChatVo>),
-    ),
-)]
 /// 查询用户最近聊天列表
 async fn history(
     State(app_state): State<AppState>,
@@ -542,15 +488,6 @@ struct PasswordReq {
     password: String,
 }
 
-#[utoipa::path(
-    post,
-    path = "/password",
-    request_body(content = PasswordReq, description = "修改密码", content_type = "application/json"
-    ),
-    responses(
-        (status = 404, description = "用户不存在", content_type = "application/json", body = UserErr)
-    ),
-)]
 /// 修改密码
 async fn password(
     State(app_state): State<AppState>,
@@ -587,17 +524,25 @@ pub(crate) async fn check_status(
     }
 }
 
-#[utoipa::path(
-    get,
-    path = "/{name}",
-    params(
-        ("name" = String, Path, description = "用户名")
-    ),
-    responses(
-        (status = 200, description = "查询成功", body = UserDetail),
-        (status = 404, description = "用户不存在", body = UserErr),
-    ),
-)]
+/// 根据用户名模糊查询用户列表
+async fn search_by_name(
+    State(app_state): State<AppState>,
+    Path(name): Path<String>,
+    token: Token,
+) -> Res<Json<Vec<UserDetail>>> {
+    let users = User::find()
+        .filter(user::Column::Name.contains(name.clone()))
+        .all(&app_state.db)
+        .await?;
+    let futures = users.into_iter().map(async |u| {
+        let mut detail = UserDetail::from(u);
+        detail.is_friend = friend::is_friend(&app_state, detail.id, token.id).await;
+        detail
+    });
+    let vec = futures::future::join_all(futures).await;
+    Ok(Json(vec))
+}
+
 /// 根据用户名查询用户详情，并判断是否是自己好友
 async fn detail(
     State(app_state): State<AppState>,
@@ -610,6 +555,23 @@ async fn detail(
         .await?
     {
         None => Err(UserErr::UserNameNotExist(name).into()),
+        Some(user) => {
+            let mut detail = UserDetail::from(user);
+            detail.is_friend = friend::is_friend(&app_state, detail.id, token.id).await;
+            Ok(Json(detail))
+        }
+    }
+}
+
+/// 根据用户ID查询用户详情，并判断是否是自己好友
+async fn detail_by_id(
+    State(app_state): State<AppState>,
+    Path(uid): Path<i32>,
+    token: Token,
+) -> Res<Json<UserDetail>> {
+    let user = get_by_id(uid, &app_state).await?;
+    match user {
+        None => Err(UserErr::UserNotExist(uid).into()),
         Some(user) => {
             let mut detail = UserDetail::from(user);
             detail.is_friend = friend::is_friend(&app_state, detail.id, token.id).await;
