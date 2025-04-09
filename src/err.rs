@@ -134,7 +134,7 @@ impl IntoResponse for ServerError {
             }
             ServerError::CustomErr(err) => {
                 err.print();
-                (StatusCode::INTERNAL_SERVER_ERROR,).into_response()
+                (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response()
             }
             ServerError::FriendErr(err) => {
                 err.print();
@@ -146,15 +146,35 @@ impl IntoResponse for ServerError {
                         (StatusCode::FORBIDDEN, err.to_string()).into_response()
                     }
                     FriendErr::AlreadyFriend => {
-                        (StatusCode::NOT_MODIFIED, err.to_string()).into_response()
+                        (StatusCode::CREATED, err.to_string()).into_response()
                     }
                     FriendErr::RequestWaiting => {
-                        (StatusCode::NOT_MODIFIED, err.to_string()).into_response()
+                        (StatusCode::CREATED, err.to_string()).into_response()
                     }
                 }
             }
         }
         .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::friend::FriendErr;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn it_works() {
+        let string = FriendErr::RequestWaiting.to_string();
+        println!("{}", string);
+        let res = (
+            StatusCode::NOT_MODIFIED,
+            FriendErr::RequestWaiting.to_string(),
+        )
+            .into_response();
+        let stream = res.into_body().into_data_stream();
+        // TODO 为什么没有返回错误消息
     }
 }
 
