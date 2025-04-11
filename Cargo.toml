@@ -1,7 +1,7 @@
 workspace = { members = ["entity", "migration", "msg"] }
 [package]
 name = "chat-server"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A Simple Chat Server"
 authors = ["quyc <quycsff@gmail.com>"]
