@@ -3,6 +3,10 @@ workspace = { members = ["entity", "migration", "msg"] }
 name = "chat-server"
 version = "0.1.0"
 edition = "2024"
+description = "A Simple Chat Server"
+authors = ["quyc <quycsff@gmail.com>"]
+repository = "https://github.com/quyc07/chat-server"
+license = "MIT OR Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -35,4 +39,3 @@ itertools = "0.14.0"
 utoipa = { version = "5.3.1", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "9.0.0", features = ["axum"] }
 moka = { version = "0.12.8", features = ["future"] }
-tower = "0.5.0"
