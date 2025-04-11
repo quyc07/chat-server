@@ -1,4 +1,4 @@
-create table main.friend_ship
+CREATE TABLE IF NOT EXISTS friend_ship
 (
     id        integer                            not null constraint id
             primary key autoincrement,

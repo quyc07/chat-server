@@ -1,4 +1,4 @@
-create table main.friend_request
+CREATE TABLE IF NOT EXISTS "friend_request"
 (
     id          integer                    not null constraint friend_request_pk
             primary key autoincrement,
@@ -10,7 +10,7 @@ create table main.friend_request
     status      varchar(10) default 'WAIT' not null
 );
 
-create table main."group"
+CREATE TABLE IF NOT EXISTS "group"
 (
     id     integer                            not null constraint group_pk
             primary key autoincrement,
@@ -20,7 +20,28 @@ create table main."group"
     u_time datetime
 );
 
-create table main.user
+CREATE TABLE IF NOT EXISTS "read_index"
+(
+    id                integer not null constraint read_index_pk
+            primary key autoincrement,
+    uid               integer not null constraint read_index_user_id_fk_2
+            references user,
+    target_uid        integer constraint read_index_user_id_fk
+            references user,
+    target_gid        integer constraint read_index_group_id_fk
+            references "group",
+    mid               integer,
+    latest_mid        integer not null,
+    uid_of_latest_msg integer not null
+);
+
+create unique index read_index_uid_target_gid_uindex
+    on read_index (uid, target_gid);
+
+create unique index read_index_uid_target_uid_uindex
+    on read_index (uid, target_uid);
+
+CREATE TABLE IF NOT EXISTS "user"
 (
     id          integer                               not null constraint user_pk
             primary key autoincrement,
@@ -35,28 +56,7 @@ create table main.user
     email       varchar(300)
 );
 
-create table main.read_index
-(
-    id                integer not null constraint read_index_pk
-            primary key autoincrement,
-    uid               integer not null constraint read_index_user_id_fk_2
-            references main.user,
-    target_uid        integer constraint read_index_user_id_fk
-            references main.user,
-    target_gid        integer constraint read_index_group_id_fk
-            references main."group",
-    mid               integer,
-    latest_mid        integer not null,
-    uid_of_latest_msg integer not null
-);
-
-create unique index main.read_index_uid_target_gid_uindex
-    on main.read_index (uid, target_gid);
-
-create unique index main.read_index_uid_target_uid_uindex
-    on main.read_index (uid, target_uid);
-
-create table main.user_group_rel
+CREATE TABLE IF NOT EXISTS "user_group_rel"
 (
     id       integer                            not null constraint user_group_rel_pk
             primary key autoincrement,
