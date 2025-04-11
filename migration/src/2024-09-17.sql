@@ -20,28 +20,6 @@ create table main."group"
     u_time datetime
 );
 
-create table main.seaql_migrations
-(
-    version    varchar not null
-        primary key,
-    applied_at bigint  not null
-);
-
-create table main.sqlite_master
-(
-    type     TEXT,
-    name     TEXT,
-    tbl_name TEXT,
-    rootpage INT,
-    sql      TEXT
-);
-
-create table main.sqlite_sequence
-(
-    name,
-    seq
-);
-
 create table main.user
 (
     id          integer                               not null constraint user_pk
