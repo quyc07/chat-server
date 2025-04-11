@@ -11,8 +11,8 @@ license = "MIT OR Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-entity = { path = "entity" }
-migration = { path = "migration" }
+entity = { path = "entity", version = "0.1.0"}
+migration = { path = "migration",version = "0.1.0" }
 msg = { path = "msg" }
 axum = { version = "0.8.1", features = ["macros"] }
 axum-extra = { version = "0.10.0", features = ["typed-header"] }
@@ -39,3 +39,4 @@ itertools = "0.14.0"
 utoipa = { version = "5.3.1", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "9.0.0", features = ["axum"] }
 moka = { version = "0.12.8", features = ["future"] }
+openssl = { version = "0.10", features = ["vendored"] }
