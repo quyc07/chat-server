@@ -1,19 +1,18 @@
-CREATE TABLE IF NOT EXISTS "friend_request"
+create table main.friend_request
 (
-    id          integer not null
-        constraint friend_request_pk
+    id          integer                    not null constraint friend_request_pk
             primary key autoincrement,
-    request_id  integer not null,
-    target_id   integer not null,
+    request_id  integer                    not null,
+    target_id   integer                    not null,
     reason      varchar(300),
-    create_time datetime default CURRENT_TIMESTAMP,
-    modify_time datetime
-    , status varchar(10) default 'WAIT' not null);
+    create_time datetime    default CURRENT_TIMESTAMP,
+    modify_time datetime,
+    status      varchar(10) default 'WAIT' not null
+);
 
-CREATE TABLE IF NOT EXISTS "group"
+create table main."group"
 (
-    id     integer                            not null
-        constraint group_pk
+    id     integer                            not null constraint group_pk
             primary key autoincrement,
     name   varchar(300)                       not null,
     admin  integer                            not null,
@@ -21,35 +20,31 @@ CREATE TABLE IF NOT EXISTS "group"
     u_time datetime
 );
 
-CREATE TABLE IF NOT EXISTS "read_index"
+create table main.seaql_migrations
 (
-    id                integer not null
-        constraint read_index_pk
-            primary key autoincrement,
-    uid               integer not null
-        constraint read_index_user_id_fk_2
-            references user,
-    target_uid        integer
-        constraint read_index_user_id_fk
-            references user,
-    target_gid        integer
-        constraint read_index_group_id_fk
-            references "group",
-    mid               integer,
-    latest_mid        integer not null,
-    uid_of_latest_msg integer not null
+    version    varchar not null
+        primary key,
+    applied_at bigint  not null
 );
 
-create unique index read_index_uid_target_gid_uindex
-    on read_index (uid, target_gid);
-
-create unique index read_index_uid_target_uid_uindex
-    on read_index (uid, target_uid);
-
-CREATE TABLE IF NOT EXISTS "user"
+create table main.sqlite_master
 (
-    id          integer                               not null
-        constraint user_pk
+    type     TEXT,
+    name     TEXT,
+    tbl_name TEXT,
+    rootpage INT,
+    sql      TEXT
+);
+
+create table main.sqlite_sequence
+(
+    name,
+    seq
+);
+
+create table main.user
+(
+    id          integer                               not null constraint user_pk
             primary key autoincrement,
     name        varchar(255)                          not null,
     phone       varchar(11),
@@ -58,13 +53,34 @@ CREATE TABLE IF NOT EXISTS "user"
     update_time datetime,
     status      varchar(10) default 'NORMAL'          not null,
     dgraph_uid  varchar(10) default ''                not null,
-    role        varchar(10) default 'User'            not null
-    , email varchar(300));
+    role        varchar(10) default 'User'            not null,
+    email       varchar(300)
+);
 
-CREATE TABLE IF NOT EXISTS "user_group_rel"
+create table main.read_index
 (
-    id       integer                            not null
-        constraint user_group_rel_pk
+    id                integer not null constraint read_index_pk
+            primary key autoincrement,
+    uid               integer not null constraint read_index_user_id_fk_2
+            references main.user,
+    target_uid        integer constraint read_index_user_id_fk
+            references main.user,
+    target_gid        integer constraint read_index_group_id_fk
+            references main."group",
+    mid               integer,
+    latest_mid        integer not null,
+    uid_of_latest_msg integer not null
+);
+
+create unique index main.read_index_uid_target_gid_uindex
+    on main.read_index (uid, target_gid);
+
+create unique index main.read_index_uid_target_uid_uindex
+    on main.read_index (uid, target_uid);
+
+create table main.user_group_rel
+(
+    id       integer                            not null constraint user_group_rel_pk
             primary key autoincrement,
     group_id integer                            not null,
     user_id  integer                            not null,
