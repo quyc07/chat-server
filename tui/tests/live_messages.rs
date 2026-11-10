@@ -1,12 +1,14 @@
 //! Behavioural tests for live messages arriving through the push stream.
 //!
-//! These use the pure state-machine seam: a [`StreamChat`] event goes in, the
+//! These use the pure state-machine seam: a [`StreamMessage`] event goes in, the
 //! conversation list and the open pane come out. No terminal, no server, no
 //! sleeping: the debounce is advanced with explicit [`Event::Tick`]s.
 
 use std::time::Duration;
 
-use chat_tui::model::{self, Conversation, ConversationId, Message, StreamChat, Unread};
+use chat_tui::model::{
+    self, Conversation, ConversationId, Message, ReadPosition, StreamMessage, Unread,
+};
 use chat_tui::state::{Effect, Event, Key, Machine, REFRESH_DEBOUNCE, Screen};
 use chrono::NaiveDateTime;
 
@@ -48,8 +50,14 @@ fn message(mid: i64, from_uid: i32, from_name: &str, body: &str, time: &str) -> 
     }
 }
 
-fn chat(mid: i64, from_uid: i32, target: ConversationId, body: &str, time: &str) -> StreamChat {
-    StreamChat {
+fn stream_message(
+    mid: i64,
+    from_uid: i32,
+    target: ConversationId,
+    body: &str,
+    time: &str,
+) -> StreamMessage {
+    StreamMessage {
         mid,
         from_uid,
         target,
@@ -103,7 +111,7 @@ fn a_message_for_the_open_conversation_appears_without_an_unread_bump() {
     with_two_conversations(&mut machine);
     assert_eq!(machine.state().active, Some(ConversationId::User(2)));
 
-    let effects = machine.handle(Event::Chat(chat(
+    let effects = machine.handle(Event::MessageReceived(stream_message(
         50,
         2,
         ConversationId::User(1),
@@ -113,10 +121,10 @@ fn a_message_for_the_open_conversation_appears_without_an_unread_bump() {
 
     assert_eq!(
         effects,
-        vec![Effect::ReportRead {
+        vec![Effect::ReportRead(ReadPosition {
             conversation: ConversationId::User(2),
-            mid: 50,
-        }],
+            mid: 50
+        })],
         "no request is needed to display it, but the open conversation stays read"
     );
     let state = machine.state();
@@ -157,7 +165,7 @@ fn an_echo_of_a_message_already_in_the_pane_is_deduped_by_mid() {
     });
 
     // The server echoes the sender's own message back on the stream.
-    machine.handle(Event::Chat(chat(
+    machine.handle(Event::MessageReceived(stream_message(
         42,
         1,
         ConversationId::User(2),
@@ -177,7 +185,7 @@ fn a_message_for_another_conversation_bumps_its_unread_and_moves_it_to_the_top()
     let mut machine = logged_in(1);
     with_two_conversations(&mut machine);
 
-    let effects = machine.handle(Event::Chat(chat(
+    let effects = machine.handle(Event::MessageReceived(stream_message(
         60,
         3,
         ConversationId::User(1),
@@ -216,7 +224,7 @@ fn incoming_messages_debounce_the_conversation_list_refresh() {
     let mut machine = logged_in(1);
     with_two_conversations(&mut machine);
 
-    machine.handle(Event::Chat(chat(
+    machine.handle(Event::MessageReceived(stream_message(
         60,
         3,
         ConversationId::User(1),
@@ -229,7 +237,7 @@ fn incoming_messages_debounce_the_conversation_list_refresh() {
             .is_empty(),
         "one second is inside the debounce window"
     );
-    machine.handle(Event::Chat(chat(
+    machine.handle(Event::MessageReceived(stream_message(
         61,
         3,
         ConversationId::User(1),
@@ -260,7 +268,7 @@ fn incoming_messages_debounce_the_conversation_list_refresh() {
 fn the_debounce_fires_exactly_at_the_window_boundary() {
     let mut machine = logged_in(1);
     with_two_conversations(&mut machine);
-    machine.handle(Event::Chat(chat(
+    machine.handle(Event::MessageReceived(stream_message(
         60,
         3,
         ConversationId::User(1),
@@ -280,7 +288,7 @@ fn a_message_from_a_conversation_never_seen_adds_a_row_and_asks_for_the_name() {
     let mut machine = logged_in(1);
     with_two_conversations(&mut machine);
 
-    let effects = machine.handle(Event::Chat(chat(
+    let effects = machine.handle(Event::MessageReceived(stream_message(
         70,
         4,
         ConversationId::User(1),
@@ -303,7 +311,7 @@ fn a_message_from_a_conversation_never_seen_adds_a_row_and_asks_for_the_name() {
     assert_eq!(state.conversations[0].preview, "第一次说话");
 
     // A second message from the same unknown peer reuses the row.
-    let effects = machine.handle(Event::Chat(chat(
+    let effects = machine.handle(Event::MessageReceived(stream_message(
         71,
         4,
         ConversationId::User(1),
@@ -328,7 +336,7 @@ fn a_message_from_an_unknown_group_gets_a_placeholder_without_a_user_lookup() {
     let mut machine = logged_in(1);
     with_two_conversations(&mut machine);
 
-    let effects = machine.handle(Event::Chat(chat(
+    let effects = machine.handle(Event::MessageReceived(stream_message(
         75,
         4,
         ConversationId::Group(8),
@@ -351,7 +359,7 @@ fn my_own_echo_in_another_conversation_does_not_raise_its_unread_count() {
     let mut machine = logged_in(1);
     with_two_conversations(&mut machine);
 
-    let effects = machine.handle(Event::Chat(chat(
+    let effects = machine.handle(Event::MessageReceived(stream_message(
         80,
         1,
         ConversationId::User(3),
@@ -472,7 +480,7 @@ fn stream_traffic_after_the_session_ended_is_ignored() {
     machine.handle(Event::TokenExpired);
     assert_eq!(machine.state().screen, Screen::Login);
 
-    let effects = machine.handle(Event::Chat(chat(
+    let effects = machine.handle(Event::MessageReceived(stream_message(
         99,
         2,
         ConversationId::User(1),
@@ -514,7 +522,7 @@ fn an_echo_that_beats_the_send_response_replaces_the_optimistic_row() {
 
     // The push echo wins the race: the pending row has no mid yet, so the echo
     // consumes it by conversation and body instead of appending a second row.
-    machine.handle(Event::Chat(chat(
+    machine.handle(Event::MessageReceived(stream_message(
         50,
         1,
         ConversationId::User(2),
@@ -571,7 +579,7 @@ fn an_echo_of_an_already_confirmed_send_is_not_appended_again() {
         1
     );
 
-    machine.handle(Event::Chat(chat(
+    machine.handle(Event::MessageReceived(stream_message(
         50,
         1,
         ConversationId::User(2),

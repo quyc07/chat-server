@@ -11,22 +11,26 @@ use reqwest::{Client, StatusCode};
 use serde_json::json;
 
 use crate::model::{
-    self, Conversation, ConversationId, FoundUser, Friend, FriendDecision, FriendRequest,
-    LoginWire, Message, ReviewOutcome, SendOutcome,
+    self, Conversation, FoundUser, Friend, FriendDecision, FriendRequest, LoginWire, Message,
+    ReadPosition, ReviewOutcome, SendOutcome,
 };
 
 /// How long a request may take before the UI reports the server unreachable.
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ApiError {
     /// The server could not be reached at all (connect error, timeout, DNS...).
+    #[error("无法连接服务器：{0}")]
     Unreachable(String),
     /// 401: credentials were rejected or the token is no longer valid.
+    #[error("{0}")]
     Unauthorized(String),
     /// Any other non-success status. `message` is the server's own text.
+    #[error("服务器返回 {status}：{message}")]
     Status { status: u16, message: String },
     /// The body was not the JSON the server documents.
+    #[error("无法解析服务器响应：{0}")]
     Decode(String),
 }
 
@@ -196,9 +200,9 @@ impl ApiClient {
     }
 
     /// `PUT /user/{peer}/send` with `{msg}`: send one direct message and return
-    /// the new message id. The id arrives as a JSON string (`"42"`); the model
-    /// layer is the one place that unwraps it. A non-friend peer is a 404 with
-    /// the server's own reason.
+    /// the new message id. The server renders `Res<String>` as plain text, so
+    /// the body is `42` (not JSON `"42"`); the model layer is the only place that
+    /// parses it. A non-friend peer is a 404 with the server's own reason.
     pub async fn send_message(&self, peer: i32, msg: &str) -> Result<i64, ApiError> {
         let response = self
             .authorized(
@@ -211,23 +215,19 @@ impl ApiClient {
             .await
             .map_err(map_send_error)?;
         let body = read_body(response).await?;
-        model::sent_mid_from_json(&body).map_err(|e| ApiError::Decode(e.to_string()))
+        model::sent_mid_from_body(&body).map_err(|e| ApiError::Decode(e.to_string()))
     }
 
     /// `PUT /ri` with `{"User":{"target_uid":..,"mid":..}}` or the group shape:
     /// the read position the server derives unread counts from. Success carries
     /// no body; any failure is best effort (the state machine only surfaces it).
-    pub async fn report_read(
-        &self,
-        conversation: ConversationId,
-        mid: i64,
-    ) -> Result<(), ApiError> {
+    pub async fn report_read(&self, position: ReadPosition) -> Result<(), ApiError> {
         let response = self
             .authorized(
                 self.http
                     .put(self.url("/ri"))
                     .header(CONTENT_TYPE, "application/json")
-                    .json(&model::read_index_body(conversation, mid)),
+                    .json(&model::read_index_body(position)),
             )
             .send()
             .await
@@ -451,9 +451,10 @@ async fn read_raw(response: reqwest::Response) -> Result<(StatusCode, Vec<u8>), 
     Ok((status, bytes.to_vec()))
 }
 
-/// The server's error bodies are either a JSON string (`Json(err.to_string())`,
-/// e.g. `"用户名或密码错误"`) or a bare text body for generic 500s. Strip the
-/// JSON string wrapper when present, otherwise pass the text through.
+/// The server's error bodies are mostly bare text (`(StatusCode, err.to_string())`
+/// in `src/err.rs`), but validator and JSON-rejection failures use `Json(String)`,
+/// which is a quoted JSON string. Strip the wrapper when present, otherwise pass
+/// the text through.
 fn server_message(bytes: &[u8]) -> String {
     let text = std::str::from_utf8(bytes).unwrap_or_default().trim();
     match serde_json::from_str::<String>(text) {

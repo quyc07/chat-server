@@ -21,8 +21,9 @@ use tokio::time::timeout;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-/// `ChatMessage` from `src/message.rs`, wrapped in the server's SSE framing.
-const CHAT_DATA: &str = r#"{"mid":42,"payload":{"from_uid":2,"created_at":"2026-11-11 09:00:00","target":{"User":{"uid":1}},"detail":{"Normal":{"content":{"content":"早上好"}}}}}"#;
+/// The server's SSE `data:` line: `src/event.rs` serialises its externally
+/// tagged `Message` enum, so the message is wrapped in `{"ChatMessage": ...}`.
+const CHAT_DATA: &str = r#"{"ChatMessage":{"mid":42,"payload":{"from_uid":2,"created_at":"2026-11-11 09:00:00","target":{"User":{"uid":1}},"detail":{"Normal":{"content":{"content":"早上好"}}}}}}"#;
 
 fn stream_body(extra: &str) -> String {
     format!(": keep-alive-text\n\n{extra}")
@@ -94,9 +95,9 @@ async fn a_cleanly_closed_stream_is_redialed_and_reports_the_down_up_cycle() {
         events[2]
     );
     match &events[3] {
-        Event::Chat(chat) => {
-            assert_eq!(chat.mid, 42);
-            assert_eq!(chat.body, "早上好");
+        Event::MessageReceived(message) => {
+            assert_eq!(message.mid, 42);
+            assert_eq!(message.body, "早上好");
         }
         other => panic!("the redialed stream must deliver messages, got {other:?}"),
     }

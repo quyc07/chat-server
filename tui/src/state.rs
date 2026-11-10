@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use crate::model::{
     Conversation, ConversationId, FoundUser, Friend, FriendDecision, FriendRequest,
-    FriendRequestStatus, Message, MessageView, ReviewOutcome, SendOutcome, StreamChat, Unread,
+    FriendRequestStatus, Message, MessageView, ReadPosition, ReviewOutcome, SendOutcome,
+    StreamMessage, Unread,
 };
 
 /// The server caps `PageReq.limit` at 50; the client asks for as much as allowed.
@@ -268,9 +269,9 @@ pub enum Event {
         outcome: ReviewOutcome,
     },
     FriendRequestReviewFailed(String),
-    /// One chat message arrived on the event stream. The server has already
-    /// filtered it to messages addressed to or sent by this user.
-    Chat(StreamChat),
+    /// One message arrived on the event stream. The server has already filtered
+    /// it to messages addressed to or sent by this user.
+    MessageReceived(StreamMessage),
     /// `GET /user/detail/{uid}` answered for a peer whose conversation was not
     /// in the list yet.
     PeerLoaded {
@@ -285,11 +286,10 @@ pub enum Event {
     /// The server accepted a read position. Nothing is recomputed locally: the
     /// unread count is the server's, so only a list refresh follows.
     ReadReported,
-    /// The server rejected a read position. `mid` names the position that has to
-    /// be retried later; the message is already human-readable.
+    /// The server rejected a read position. `position` is the one that has to be
+    /// retried later; the message is already human-readable.
     ReadReportFailed {
-        conversation: ConversationId,
-        mid: i64,
+        position: ReadPosition,
         message: String,
     },
     /// A push connection is open and delivering bytes. The first one after
@@ -339,13 +339,10 @@ pub enum Effect {
     LoadMessages {
         peer: i32,
     },
-    /// `PUT /ri`: tell the server this conversation is read up to `mid`. The
-    /// server derives the unread count from it, so this is the only way an open
-    /// conversation becomes read.
-    ReportRead {
-        conversation: ConversationId,
-        mid: i64,
-    },
+    /// `PUT /ri`: tell the server this conversation is read up to the position's
+    /// `mid`. The server derives the unread count from it, so this is the only
+    /// way an open conversation becomes read.
+    ReportRead(ReadPosition),
     /// `PUT /user/{peer}/send`. `local_id` correlates the optimistic row with the
     /// [`Event::MessageSent`] / [`Event::MessageSendFailed`] that follows.
     SendMessage {
@@ -452,9 +449,11 @@ impl fmt::Debug for Session {
 
 /// Delivery state of one optimistically appended message.
 ///
-/// Sending and Failed rows have no server id yet (or never will); Confirmed rows
-/// carry the id the server assigned, which is what makes the row the real
-/// message rather than a duplicate of it.
+/// Sending and Failed rows have no server id yet (or never will). Confirmed rows
+/// carry the id the server assigned; a confirmed row for the open conversation
+/// is migrated into [`State::messages`] immediately, so a `Confirmed` row in
+/// [`State::pending`] only survives for a conversation that was not open when
+/// the reply arrived.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delivery {
     Sending,
@@ -467,10 +466,10 @@ pub enum Delivery {
     },
 }
 
-/// A message the user sent that is not part of the server's history yet.
+/// A message the user sent that the pane has not reconciled yet.
 ///
 /// Pending rows live next to [`State::messages`] instead of inside it so the
-/// server's history stays exactly what the server said, while the optimistic row
+/// server's history stays exactly what the server said, while an optimistic row
 /// can still be reconciled (or marked failed) without being duplicated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingMessage {
@@ -479,6 +478,10 @@ pub struct PendingMessage {
     pub conversation: ConversationId,
     pub body: String,
     pub delivery: Delivery,
+    /// The newest message id in the pane when the send was typed. Message ids
+    /// are a global monotonic sequence, so a history snapshot row at or below
+    /// this id cannot be this send; only a row above it can.
+    pub baseline_mid: i64,
 }
 
 impl PendingMessage {
@@ -731,13 +734,13 @@ impl Machine {
                 // A response can land after the session ended (token rejected,
                 // user quit). Never let it refill the list or clear the message
                 // that explains why the user is back on the login screen.
-                if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+                if !self.on_conversations() {
                     return Vec::new();
                 }
                 self.conversations_loaded(page, items)
             }
             Event::ConversationsFailed(message) => {
-                if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+                if !self.on_conversations() {
                     return Vec::new();
                 }
                 self.state.loading = false;
@@ -791,15 +794,13 @@ impl Machine {
                 outcome,
             } => self.friend_request_reviewed(request_id, decision, outcome),
             Event::FriendRequestReviewFailed(message) => self.friend_request_review_failed(message),
-            Event::Chat(chat) => self.chat_received(chat),
+            Event::MessageReceived(message) => self.message_received(message),
             Event::PeerLoaded { uid, name } => self.peer_loaded(uid, name),
             Event::ConversationsRefreshed { items } => self.conversations_refreshed(items),
             Event::ReadReported => self.read_reported(),
-            Event::ReadReportFailed {
-                conversation,
-                mid,
-                message,
-            } => self.read_report_failed(conversation, mid, message),
+            Event::ReadReportFailed { position, message } => {
+                self.read_report_failed(position, message)
+            }
             Event::LinkUp => self.link_up(),
             Event::LinkDown => self.link_down(),
             Event::CatchUpLoaded {
@@ -922,7 +923,7 @@ impl Machine {
     }
 
     fn open_friends(&mut self) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+        if !self.on_conversations() {
             return Vec::new();
         }
         self.state.screen = Screen::Friends;
@@ -1111,7 +1112,7 @@ impl Machine {
     /// The `/open` fuzzy lookup answered. The reply is only trusted when it is
     /// the answer to the lookup currently in flight.
     fn open_users_found(&mut self, query: String, mut users: Vec<FoundUser>) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+        if !self.on_conversations() {
             return Vec::new();
         }
         if !self.state.open.searching || query != self.state.open.query {
@@ -1143,7 +1144,7 @@ impl Machine {
     }
 
     fn open_lookup_failed(&mut self, query: String, message: String) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+        if !self.on_conversations() {
             return Vec::new();
         }
         if !self.state.open.searching || query != self.state.open.query {
@@ -1180,7 +1181,10 @@ impl Machine {
             // through `/open` reads the conversation exactly like a list
             // switch does. A peer with no row has nothing to report yet.
             let mid = self.state.conversations[index].mid;
-            effects = self.report_read(ConversationId::User(peer), mid);
+            effects = self.report_read(ReadPosition {
+                conversation: ConversationId::User(peer),
+                mid,
+            });
         }
         effects.push(Effect::LoadMessages { peer });
         effects
@@ -1335,6 +1339,12 @@ impl Machine {
         Vec::new()
     }
 
+    /// True only while the signed-in user is on the conversation-list screen.
+    /// Late HTTP replies from a previous session must never repaint it.
+    fn on_conversations(&self) -> bool {
+        self.state.screen == Screen::Conversations && self.state.is_logged_in()
+    }
+
     fn friends_active(&self) -> bool {
         self.state.screen == Screen::Friends && self.state.is_logged_in()
     }
@@ -1365,10 +1375,19 @@ impl Machine {
         let password = std::mem::take(&mut self.state.form.password);
         // The login response has no uid; the JWT payload does. Read it once per
         // token, here, so the rest of the state machine never parses a JWT.
-        let uid = crate::model::uid_from_token(&token).ok();
+        // Without our own id every message's authorship would silently invert,
+        // so a token we cannot attribute is a failed login, not a usable session.
+        let uid = match crate::model::uid_from_token(&token) {
+            Ok(uid) => uid,
+            Err(error) => {
+                self.state.form.busy = false;
+                self.state.status = Some(format!("登录令牌无效，无法确定当前用户：{error}"));
+                return Vec::new();
+            }
+        };
         self.state.session = Some(Session {
             token,
-            uid,
+            uid: Some(uid),
             name,
             password,
         });
@@ -1464,12 +1483,15 @@ impl Machine {
         match conversation.id {
             ConversationId::User(peer) => {
                 self.state.messages_loading = true;
-                let mut effects = self.report_read(conversation.id, conversation.mid);
+                let mut effects = self.report_read(ReadPosition {
+                    conversation: conversation.id,
+                    mid: conversation.mid,
+                });
                 effects.push(Effect::LoadMessages { peer });
                 effects
             }
             ConversationId::Group(_) => {
-                // Group chat is phase two in the spec. A direct-message history
+                // Group conversations are phase two in the spec. A direct-message history
                 // request for a group id cannot succeed, so explain instead.
                 self.state.status = Some("群聊功能暂未实现".to_string());
                 Vec::new()
@@ -1489,21 +1511,36 @@ impl Machine {
         conversation: ConversationId,
         items: Vec<Message>,
     ) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+        if !self.on_conversations() {
             return Vec::new();
         }
         if self.state.active != Some(conversation) {
             // The user opened another conversation while this was in flight.
             return Vec::new();
         }
-        // A confirmed optimistic row that the server's history now contains is no
-        // longer optimistic; drop it instead of drawing the same message twice.
+        // A sent row the server's history now contains is no longer optimistic;
+        // drop it instead of drawing the same message twice.
+        self.reconcile_pending(conversation, &items);
         self.state.pending.retain(|row| {
             !(row.conversation == conversation
                 && matches!(row.delivery, Delivery::Confirmed { mid, .. }
                     if items.iter().any(|item| item.mid == mid)))
         });
-        self.state.messages = items;
+        // The snapshot is authoritative up to its newest id. Anything the pane
+        // already holds above that arrived after the server answered this
+        // request (a send reply or a stream message) and must not be dropped.
+        let newest = items.iter().map(|item| item.mid).max();
+        let mut messages = items;
+        if let Some(newest) = newest {
+            messages.extend(
+                self.state
+                    .messages
+                    .drain(..)
+                    .filter(|message| message.mid > newest),
+            );
+            messages.sort_by_key(|message| message.mid);
+        }
+        self.state.messages = messages;
         self.state.messages_loading = false;
         self.state.message_scroll_up = 0;
         self.state.status = None;
@@ -1514,7 +1551,7 @@ impl Machine {
     }
 
     fn messages_failed(&mut self, conversation: ConversationId, message: String) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+        if !self.on_conversations() {
             return Vec::new();
         }
         if self.state.active != Some(conversation) {
@@ -1531,17 +1568,17 @@ impl Machine {
     /// to messages addressed to or sent by this user, so there is no filter here
     /// — only the dedupe against rows that already exist and the decision where
     /// the message belongs.
-    fn chat_received(&mut self, chat: StreamChat) -> Vec<Effect> {
+    fn message_received(&mut self, stream_message: StreamMessage) -> Vec<Effect> {
         if !self.state.is_logged_in() {
             return Vec::new();
         }
         let me = self.state.user_uid();
-        let conversation = chat.conversation(me);
-        let mine = chat.is_mine(me);
-        let from_uid = chat.from_uid;
-        let mid = chat.mid;
-        let preview = crate::model::excerpt(&chat.body);
-        let time = chat.time;
+        let conversation = stream_message.conversation(me);
+        let mine = stream_message.is_mine(me);
+        let from_uid = stream_message.from_uid;
+        let mid = stream_message.mid;
+        let preview = crate::model::excerpt(&stream_message.body);
+        let time = stream_message.time;
 
         if self.state.active == Some(conversation) {
             // The pane already shows this message when the confirmed history has
@@ -1569,12 +1606,15 @@ impl Machine {
             // The echo can beat the HTTP send result, in which case the optimistic
             // row still has no mid and cannot be found by one. Consume the oldest
             // matching send instead; the late `MessageSent` then finds no row to
-            // confirm, which the send path already treats as reconciled.
+            // confirm, which the send path already treats as reconciled. The echo
+            // must also be newer than the row's baseline, so a redelivered older
+            // message with the same text cannot swallow a fresh send.
             if mine {
                 let optimistic = self.state.pending.iter().position(|row| {
                     row.conversation == conversation
                         && matches!(row.delivery, Delivery::Sending)
-                        && row.body == chat.body
+                        && row.body == stream_message.body
+                        && mid > row.baseline_mid
                 });
                 if let Some(index) = optimistic {
                     self.state.pending.remove(index);
@@ -1588,8 +1628,8 @@ impl Machine {
                     .map(|row| row.title.clone())
                     .unwrap_or_else(|| format!("用户 {from_uid}"))
             };
-            let message = chat.into_message(from_name);
-            self.state.messages.push(message);
+            let message = stream_message.into_message(from_name);
+            self.insert_message(message);
             self.update_row_summary(conversation, mid, preview, time);
             self.realign_selected();
             // The list is the server's to order; refresh it (debounced) instead
@@ -1600,7 +1640,7 @@ impl Machine {
             return if mine {
                 Vec::new()
             } else {
-                self.report_read(conversation, mid)
+                self.report_read(ReadPosition { conversation, mid })
             };
         }
 
@@ -1673,7 +1713,7 @@ impl Machine {
     /// local copies outright: order, preview, and unread are its logic. Rows
     /// outside the first page, or seen only on the stream, are kept.
     fn conversations_refreshed(&mut self, items: Vec<Conversation>) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+        if !self.on_conversations() {
             return Vec::new();
         }
         for item in items {
@@ -1725,19 +1765,14 @@ impl Machine {
         Vec::new()
     }
 
-    fn read_report_failed(
-        &mut self,
-        conversation: ConversationId,
-        mid: i64,
-        message: String,
-    ) -> Vec<Effect> {
+    fn read_report_failed(&mut self, position: ReadPosition, message: String) -> Vec<Effect> {
         if !self.state.is_logged_in() {
             return Vec::new();
         }
         // Nothing was accepted, so the position does not count as reported: the
         // next open, history load, or stream message retries it.
-        if self.reported.get(&conversation) == Some(&mid) {
-            self.reported.remove(&conversation);
+        if self.reported.get(&position.conversation) == Some(&position.mid) {
+            self.reported.remove(&position.conversation);
         }
         // Never a dialog and never a blocked input: only the status line, and
         // only the server's own text — the ids stay inside the client.
@@ -1751,7 +1786,10 @@ impl Machine {
     /// catch-up) end here, so a message the user can see is never left unread.
     fn report_newest_read(&mut self, conversation: ConversationId) -> Vec<Effect> {
         match self.state.messages.iter().map(|message| message.mid).max() {
-            Some(newest) => self.report_read(conversation, newest),
+            Some(newest) => self.report_read(ReadPosition {
+                conversation,
+                mid: newest,
+            }),
             None => Vec::new(),
         }
     }
@@ -1763,24 +1801,66 @@ impl Machine {
     /// without turning into duplicate requests. The tracker records the position
     /// as reported *before* the request leaves; a rejection rolls it back so the
     /// next event retries instead of silently staying unread.
-    fn report_read(&mut self, conversation: ConversationId, mid: i64) -> Vec<Effect> {
+    fn report_read(&mut self, position: ReadPosition) -> Vec<Effect> {
         // Message ids start at 1 (the server's sled sequence), so there is no
         // position to report before the first message. Reporting one anyway
         // would make the server upsert a row for the peer.
-        if mid < 1 {
+        if position.mid < 1 {
             return Vec::new();
         }
         if self
             .reported
-            .get(&conversation)
+            .get(&position.conversation)
             .copied()
             .unwrap_or(i64::MIN)
-            >= mid
+            >= position.mid
         {
             return Vec::new();
         }
-        self.reported.insert(conversation, mid);
-        vec![Effect::ReportRead { conversation, mid }]
+        self.reported.insert(position.conversation, position.mid);
+        vec![Effect::ReportRead(position)]
+    }
+
+    /// Insert one confirmed message into the pane in `mid` order. Message ids are
+    /// a single global sequence, so this is also the render order.
+    fn insert_message(&mut self, message: Message) {
+        let at = self
+            .state
+            .messages
+            .partition_point(|existing| existing.mid < message.mid);
+        self.state.messages.insert(at, message);
+    }
+
+    /// Consume optimistic rows that a history snapshot has already stored.
+    ///
+    /// A snapshot can arrive before the send's HTTP reply, in which case the
+    /// pending row still has no `mid` and cannot be matched by id. Match on the
+    /// text instead, but only against rows newer than the row's baseline: mids
+    /// are globally monotonic, so an older message with the same text cannot be
+    /// this send. Candidates are claimed one-by-one, so two identical messages
+    /// sent back-to-back still map to two rows.
+    fn reconcile_pending(&mut self, conversation: ConversationId, items: &[Message]) {
+        let me = self.state.user_uid();
+        let mut claimed: Vec<i64> = Vec::new();
+        let mut consumed: Vec<u64> = Vec::new();
+        for row in &self.state.pending {
+            if row.conversation != conversation || !matches!(row.delivery, Delivery::Sending) {
+                continue;
+            }
+            let candidate = items.iter().find(|item| {
+                Some(item.from_uid) == me
+                    && item.mid > row.baseline_mid
+                    && item.body == row.body
+                    && !claimed.contains(&item.mid)
+            });
+            if let Some(item) = candidate {
+                claimed.push(item.mid);
+                consumed.push(row.local_id);
+            }
+        }
+        self.state
+            .pending
+            .retain(|row| !consumed.contains(&row.local_id));
     }
 
     /// Refresh the last-message summary of a row that is already in the list.
@@ -1810,7 +1890,7 @@ impl Machine {
     /// all message characters, so the command is only recognised here, on
     /// submit, and only for the exact command word.
     fn submit_input(&mut self) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+        if !self.on_conversations() {
             return Vec::new();
         }
         match parse_command(&self.state.input) {
@@ -1841,7 +1921,7 @@ impl Machine {
     /// the server. `local_id` is what the HTTP result carries back; without it a
     /// late reply could not find the row it belongs to.
     fn send_message(&mut self) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+        if !self.on_conversations() {
             return Vec::new();
         }
         let Some(ConversationId::User(peer)) = self.state.active else {
@@ -1857,11 +1937,22 @@ impl Machine {
         self.state.next_local_id += 1;
         self.state.input.clear();
         self.state.status = None;
+        // Everything already on screen was stored before this send, so the
+        // server has to assign a higher mid to it. That is what later lets a
+        // history snapshot recognise the sent message without knowing its mid.
+        let baseline_mid = self
+            .state
+            .messages
+            .iter()
+            .map(|message| message.mid)
+            .max()
+            .unwrap_or(0);
         self.state.pending.push(PendingMessage {
             local_id,
             conversation: ConversationId::User(peer),
             body: text.clone(),
             delivery: Delivery::Sending,
+            baseline_mid,
         });
         vec![Effect::SendMessage {
             peer,
@@ -1870,7 +1961,14 @@ impl Machine {
         }]
     }
 
-    /// The server accepted a send: give the optimistic row the id it now has.
+    /// The server accepted a send: turn the optimistic row into confirmed
+    /// history.
+    ///
+    /// For the open conversation the row is migrated into [`State::messages`]
+    /// and inserted by `mid`, so a message that arrived while the reply was in
+    /// flight can no longer sit above it. A row confirmed while another
+    /// conversation is open has no pane to move into yet, so it stays pending
+    /// (with the server id) until that conversation's history is loaded.
     fn message_sent(
         &mut self,
         conversation: ConversationId,
@@ -1878,21 +1976,37 @@ impl Machine {
         mid: i64,
         time: chrono::NaiveDateTime,
     ) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+        if !self.on_conversations() {
             return Vec::new();
         }
-        let Some(row) = self
+        let Some(index) = self
             .state
             .pending
-            .iter_mut()
-            .find(|row| row.local_id == local_id && row.conversation == conversation)
+            .iter()
+            .position(|row| row.local_id == local_id && row.conversation == conversation)
         else {
-            // The row was already reconciled (a history reload that included it).
+            // The row was already reconciled by a stream echo or a history load.
             return Vec::new();
         };
+        let mut row = self.state.pending.remove(index);
         row.delivery = Delivery::Confirmed { mid, time };
         if self.state.active == Some(conversation) {
+            // The stream echo may already have appended the same id; keep one.
+            if !self.state.messages.iter().any(|message| message.mid == mid) {
+                let from_uid = self.state.user_uid().unwrap_or_default();
+                let from_name = self.state.user_name().unwrap_or_default().to_string();
+                let body = std::mem::take(&mut row.body);
+                self.insert_message(Message {
+                    mid,
+                    from_uid,
+                    from_name,
+                    body,
+                    time,
+                });
+            }
             self.state.status = None;
+        } else {
+            self.state.pending.push(row);
         }
         // A conversation opened from `/open` has no list row until the server
         // records the send. Ask for the authoritative list so it appears on its
@@ -1916,7 +2030,7 @@ impl Machine {
         local_id: u64,
         message: String,
     ) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+        if !self.on_conversations() {
             return Vec::new();
         }
         let Some(row) = self
@@ -1964,11 +2078,19 @@ impl Machine {
     }
 
     fn relogin_succeeded(&mut self, token: String) -> Vec<Effect> {
+        // A new token carries its own claims; re-read the uid once, as at login.
+        // A token we cannot attribute is as unusable as a rejected one: do not
+        // keep a session whose authorship would be unknown.
+        let uid = match crate::model::uid_from_token(&token) {
+            Ok(uid) => uid,
+            Err(error) => {
+                return self.relogin_failed(format!("无法从新令牌确定当前用户：{error}"));
+            }
+        };
         let Some(session) = self.state.session.as_mut() else {
             return Vec::new();
         };
-        // A new token carries its own claims; re-read the uid once, as at login.
-        session.uid = crate::model::uid_from_token(&token).ok();
+        session.uid = Some(uid);
         session.token = token;
         self.relogin_inflight = false;
         self.since_login = Duration::ZERO;
@@ -1980,25 +2102,7 @@ impl Machine {
         let Some(session) = self.state.session.take() else {
             return Vec::new();
         };
-        // Keep the user name; the password must be re-entered.
-        self.state.form.name = session.name;
-        self.state.form.password.clear();
-        self.state.form.busy = false;
-        self.state.form.mode = LoginMode::Login;
-        self.state.form.focus = Focus::Password;
-        self.state.screen = Screen::Login;
-        self.state.status = Some(format!("自动续登失败：{message}，请重新登录"));
-        self.state.conversations.clear();
-        self.state.selected = 0;
-        self.clear_open_conversation();
-        self.state.pending.clear();
-        self.state.loading = false;
-        self.state.has_more = false;
-        self.state.friends = FriendsState::default();
-        self.state.connection = Connection::Idle;
-        self.since_login = Duration::ZERO;
-        self.relogin_inflight = false;
-        self.refresh_due = None;
+        self.end_session(session, format!("自动续登失败：{message}，请重新登录"));
         Vec::new()
     }
 
@@ -2006,13 +2110,22 @@ impl Machine {
         let Some(session) = self.state.session.take() else {
             return Vec::new();
         };
+        self.end_session(session, "登录已过期，请重新登录".to_string());
+        Vec::new()
+    }
+
+    /// Return to the login screen after the session ended.
+    ///
+    /// The name is kept for convenience but the password must be re-entered, and
+    /// every piece of state private to the old session is dropped.
+    fn end_session(&mut self, session: Session, status: String) {
         self.state.form.name = session.name;
         self.state.form.password.clear();
         self.state.form.busy = false;
         self.state.form.mode = LoginMode::Login;
         self.state.form.focus = Focus::Password;
         self.state.screen = Screen::Login;
-        self.state.status = Some("登录已过期，请重新登录".to_string());
+        self.state.status = Some(status);
         self.state.conversations.clear();
         self.state.selected = 0;
         self.clear_open_conversation();
@@ -2024,16 +2137,12 @@ impl Machine {
         self.since_login = Duration::ZERO;
         self.relogin_inflight = false;
         self.refresh_due = None;
-        Vec::new()
     }
 
     fn tick(&mut self, elapsed: Duration) -> Vec<Effect> {
         // The debounced list refresh is independent of the re-login timer.
         let mut effects = self.tick_refresh(elapsed);
-        if !matches!(self.state.screen, Screen::Conversations | Screen::Friends)
-            || !self.state.is_logged_in()
-            || self.relogin_inflight
-        {
+        if (!self.on_conversations() && !self.friends_active()) || self.relogin_inflight {
             return effects;
         }
         self.since_login += elapsed;
@@ -2117,15 +2226,17 @@ impl Machine {
         conversation: ConversationId,
         items: Vec<Message>,
     ) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+        if !self.on_conversations() {
             return Vec::new();
         }
         if self.state.active != Some(conversation) {
             // The user opened another conversation while this was in flight.
             return Vec::new();
         }
-        // An optimistic row the refetched history already contains is confirmed
-        // history now; dropping it is what keeps it from being drawn twice.
+        // A row the refetched history already contains is confirmed history now;
+        // dropping it is what keeps it from being drawn twice. This runs before
+        // the merge because the snapshot can beat the send reply.
+        self.reconcile_pending(conversation, &items);
         self.state.pending.retain(|row| {
             !(row.conversation == conversation
                 && matches!(row.delivery, Delivery::Confirmed { mid, .. }
@@ -2140,7 +2251,7 @@ impl Machine {
     /// The catch-up request itself failed (the redial worked). Keep the pane and
     /// say so on the status line; the next reconnect retries.
     fn catch_up_failed(&mut self, conversation: ConversationId, message: String) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+        if !self.on_conversations() {
             return Vec::new();
         }
         if self.state.active != Some(conversation) {

@@ -3,7 +3,7 @@
 //! These go through the pure state-machine seam: events in, state and effects out.
 //! No terminal, no server, no sleeping.
 
-use chat_tui::model::{self, Conversation, ConversationId, Message, Unread};
+use chat_tui::model::{self, Conversation, ConversationId, Message, ReadPosition, Unread};
 use chat_tui::state::{Effect, Event, Key, Machine, Screen};
 use chrono::NaiveDateTime;
 
@@ -83,10 +83,10 @@ fn the_first_conversation_opens_as_soon_as_the_list_arrives() {
         effects,
         vec![
             // Opening is reading: the position goes to the server first.
-            Effect::ReportRead {
+            Effect::ReportRead(ReadPosition {
                 conversation: ConversationId::User(2),
-                mid: 21,
-            },
+                mid: 21
+            }),
             Effect::LoadMessages { peer: 2 },
         ],
         "the highlighted row's history is requested without another keypress"
@@ -115,10 +115,10 @@ fn moving_to_another_row_switches_the_pane_and_drops_the_previous_history() {
     assert_eq!(
         effects,
         vec![
-            Effect::ReportRead {
+            Effect::ReportRead(ReadPosition {
                 conversation: ConversationId::User(3),
-                mid: 20,
-            },
+                mid: 20
+            }),
             Effect::LoadMessages { peer: 3 },
         ]
     );

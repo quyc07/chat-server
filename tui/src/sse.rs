@@ -1,6 +1,6 @@
 //! Incremental `text/event-stream` framing.
 //!
-//! This module knows the SSE transport grammar and nothing about chat: bytes in,
+//! This module knows the SSE transport grammar and nothing about conversations: bytes in,
 //! [`Frame`]s out. The server names its events (`Chat`, `Heartbeat`) and also
 //! emits `: keep-alive-text` comment lines every few seconds; comments are
 //! consumed here and never become frames, which is what keeps them out of the

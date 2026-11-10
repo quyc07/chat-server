@@ -222,8 +222,8 @@ async fn stream_once(
                 };
                 for frame in frames {
                     match model::stream_event(&frame.event, &frame.data) {
-                        Ok(Some(StreamEvent::Chat(chat))) => {
-                            if tx.send(Event::Chat(chat)).is_err() {
+                        Ok(Some(StreamEvent::MessageReceived(message))) => {
+                            if tx.send(Event::MessageReceived(message)).is_err() {
                                 return Ending::Stop;
                             }
                         }

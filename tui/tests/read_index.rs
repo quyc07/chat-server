@@ -11,7 +11,9 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chat_tui::model::{self, Conversation, ConversationId, FoundUser, Message, StreamChat, Unread};
+use chat_tui::model::{
+    self, Conversation, ConversationId, FoundUser, Message, ReadPosition, StreamMessage, Unread,
+};
 use chat_tui::state::{Effect, Event, Key, Machine, REFRESH_DEBOUNCE};
 use chrono::NaiveDateTime;
 
@@ -50,8 +52,14 @@ fn message(mid: i64, from_uid: i32, from_name: &str, body: &str, time: &str) -> 
     }
 }
 
-fn chat(mid: i64, from_uid: i32, target: ConversationId, body: &str, time: &str) -> StreamChat {
-    StreamChat {
+fn stream_message(
+    mid: i64,
+    from_uid: i32,
+    target: ConversationId,
+    body: &str,
+    time: &str,
+) -> StreamMessage {
+    StreamMessage {
         mid,
         from_uid,
         target,
@@ -109,10 +117,10 @@ fn opening_a_conversation_reports_its_last_message_as_read() {
     assert_eq!(
         effects,
         vec![
-            Effect::ReportRead {
+            Effect::ReportRead(ReadPosition {
                 conversation: ConversationId::User(2),
-                mid: 21,
-            },
+                mid: 21
+            }),
             Effect::LoadMessages { peer: 2 },
         ],
         "opening bob's conversation reports bob's newest mid, then loads history"
@@ -128,7 +136,7 @@ fn a_message_arriving_in_the_open_conversation_is_reported_as_read() {
         items: vec![message(21, 2, "bob", "早", "2026-11-11 11:00:00")],
     });
 
-    let effects = machine.handle(Event::Chat(chat(
+    let effects = machine.handle(Event::MessageReceived(stream_message(
         50,
         2,
         ConversationId::User(1),
@@ -138,10 +146,10 @@ fn a_message_arriving_in_the_open_conversation_is_reported_as_read() {
 
     assert_eq!(
         effects,
-        vec![Effect::ReportRead {
+        vec![Effect::ReportRead(ReadPosition {
             conversation: ConversationId::User(2),
-            mid: 50,
-        }],
+            mid: 50
+        })],
         "the user is looking at bob's conversation, so the new message is read"
     );
     assert_eq!(
@@ -168,10 +176,10 @@ fn history_newer_than_the_list_row_advances_the_read_position() {
 
     assert_eq!(
         effects,
-        vec![Effect::ReportRead {
+        vec![Effect::ReportRead(ReadPosition {
             conversation: ConversationId::User(2),
-            mid: 25,
-        }],
+            mid: 25
+        })],
         "the newest message the pane shows is the position that is read"
     );
 }
@@ -182,10 +190,10 @@ fn a_read_position_is_only_reported_when_it_advances() {
     let effects = with_two_conversations(&mut machine);
     assert_eq!(
         effects.first(),
-        Some(&Effect::ReportRead {
+        Some(&Effect::ReportRead(ReadPosition {
             conversation: ConversationId::User(2),
-            mid: 21,
-        }),
+            mid: 21
+        })),
         "opening reported the row's newest mid"
     );
 
@@ -209,10 +217,10 @@ fn a_read_position_is_only_reported_when_it_advances() {
     });
     assert_eq!(
         effects,
-        vec![Effect::ReportRead {
+        vec![Effect::ReportRead(ReadPosition {
             conversation: ConversationId::User(2),
-            mid: 25,
-        }]
+            mid: 25
+        })]
     );
 
     // ...and reloading the same history stays silent.
@@ -226,7 +234,7 @@ fn a_read_position_is_only_reported_when_it_advances() {
     );
 
     // A stream message advances it again.
-    let effects = machine.handle(Event::Chat(chat(
+    let effects = machine.handle(Event::MessageReceived(stream_message(
         30,
         2,
         ConversationId::User(1),
@@ -235,14 +243,14 @@ fn a_read_position_is_only_reported_when_it_advances() {
     )));
     assert_eq!(
         effects,
-        vec![Effect::ReportRead {
+        vec![Effect::ReportRead(ReadPosition {
             conversation: ConversationId::User(2),
-            mid: 30,
-        }]
+            mid: 30
+        })]
     );
 
     // A redelivery of the same message (reconnect catch-up) does not.
-    let effects = machine.handle(Event::Chat(chat(
+    let effects = machine.handle(Event::MessageReceived(stream_message(
         30,
         2,
         ConversationId::User(1),
@@ -301,7 +309,7 @@ fn a_failed_report_only_reaches_the_status_line_and_is_retried() {
         items: vec![message(21, 2, "bob", "早", "2026-11-11 11:00:00")],
     });
     type_str(&mut machine, "还没发出去的草稿");
-    let effects = machine.handle(Event::Chat(chat(
+    let effects = machine.handle(Event::MessageReceived(stream_message(
         50,
         2,
         ConversationId::User(1),
@@ -310,15 +318,17 @@ fn a_failed_report_only_reaches_the_status_line_and_is_retried() {
     )));
     assert_eq!(
         effects,
-        vec![Effect::ReportRead {
+        vec![Effect::ReportRead(ReadPosition {
             conversation: ConversationId::User(2),
-            mid: 50,
-        }]
+            mid: 50
+        })]
     );
 
     let effects = machine.handle(Event::ReadReportFailed {
-        conversation: ConversationId::User(2),
-        mid: 50,
+        position: ReadPosition {
+            conversation: ConversationId::User(2),
+            mid: 50,
+        },
         message: "服务器返回 500".to_string(),
     });
 
@@ -351,10 +361,10 @@ fn a_failed_report_only_reaches_the_status_line_and_is_retried() {
     });
     assert_eq!(
         effects,
-        vec![Effect::ReportRead {
+        vec![Effect::ReportRead(ReadPosition {
             conversation: ConversationId::User(2),
-            mid: 50,
-        }],
+            mid: 50
+        })],
         "a rejected position is retried instead of silently staying unread"
     );
 }
@@ -414,10 +424,10 @@ fn a_new_login_does_not_inherit_the_previous_sessions_read_positions() {
 
     assert_eq!(
         effects.first(),
-        Some(&Effect::ReportRead {
+        Some(&Effect::ReportRead(ReadPosition {
             conversation: ConversationId::User(2),
-            mid: 21,
-        }),
+            mid: 21
+        })),
         "positions reported by the previous session are not assumed to still be read"
     );
 }
@@ -452,10 +462,10 @@ fn a_conversation_opened_with_the_open_command_is_reported_as_read() {
     assert_eq!(
         effects,
         vec![
-            Effect::ReportRead {
+            Effect::ReportRead(ReadPosition {
                 conversation: ConversationId::User(3),
-                mid: 20,
-            },
+                mid: 20
+            }),
             Effect::LoadMessages { peer: 3 },
         ],
         "opening carol with /open marks her conversation read, like a list switch"
@@ -467,10 +477,10 @@ fn a_conversation_opened_with_the_open_command_is_reported_as_read() {
     });
     assert_eq!(
         effects,
-        vec![Effect::ReportRead {
+        vec![Effect::ReportRead(ReadPosition {
             conversation: ConversationId::User(3),
-            mid: 45,
-        }],
+            mid: 45
+        })],
         "and the history the pane shows advances the position"
     );
 }
@@ -525,10 +535,10 @@ fn messages_caught_up_after_a_reconnect_are_reported_as_read() {
 
     assert_eq!(
         effects,
-        vec![Effect::ReportRead {
+        vec![Effect::ReportRead(ReadPosition {
             conversation: ConversationId::User(2),
-            mid: 60,
-        }],
+            mid: 60
+        })],
         "the missed message is in the pane, so it is read"
     );
 

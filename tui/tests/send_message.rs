@@ -4,7 +4,7 @@
 //! HTTP call is not part of these tests; the wiring layer turns the effect into a
 //! [`Event::MessageSent`] or [`Event::MessageSendFailed`].
 
-use chat_tui::model::{self, Conversation, ConversationId, Message, Unread};
+use chat_tui::model::{self, Conversation, ConversationId, Message, StreamMessage, Unread};
 use chat_tui::state::{Delivery, Effect, Event, Key, Machine, PendingMessage, Screen};
 use chrono::NaiveDateTime;
 
@@ -38,6 +38,35 @@ fn message(mid: i64, from_uid: i32, from_name: &str, body: &str, time: &str) -> 
     }
 }
 
+fn stream_message(
+    mid: i64,
+    from_uid: i32,
+    target: ConversationId,
+    body: &str,
+    time: &str,
+) -> StreamMessage {
+    StreamMessage {
+        mid,
+        from_uid,
+        target,
+        body: body.to_string(),
+        time: at(time),
+    }
+}
+
+/// A JWT-shaped token whose payload is `{"id": uid}`: login now refuses a token
+/// it cannot attribute to a user.
+fn token_for(uid: i32) -> String {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    let header = URL_SAFE_NO_PAD.encode(r#"{{"alg":"HS256","typ":"JWT"}}"#);
+    let payload = URL_SAFE_NO_PAD.encode(format!(
+        r#"{{"id":{uid},"name":"alice","email":null,"phone":null,"exp":9999999999}}"#
+    ));
+    format!("{header}.{payload}.c2lnbmF0dXJl")
+}
+
 fn type_str(machine: &mut Machine, text: &str) {
     for c in text.chars() {
         machine.handle(Event::Key(Key::Char(c)));
@@ -51,7 +80,7 @@ fn logged_in() -> Machine {
     type_str(&mut machine, "s3cret");
     machine.handle(Event::Key(Key::Enter));
     machine.handle(Event::LoginSucceeded {
-        token: "tok-1".to_string(),
+        token: token_for(1),
     });
     machine
 }
@@ -147,19 +176,55 @@ fn a_confirmed_send_takes_the_server_id_without_a_duplicate_row() {
     );
     assert!(!last.failed);
 
-    let rows = pending_rows(&machine);
-    assert_eq!(rows.len(), 1);
-    assert_eq!(
-        rows[0].delivery,
-        Delivery::Confirmed {
-            mid: 42,
-            time: at("2026-11-11 11:59:30"),
-        },
-        "the server's quoted id is retained on the row"
+    assert!(
+        pending_rows(&machine).is_empty(),
+        "a confirmed row belongs to the message history, not to the optimistic list"
     );
     assert_eq!(
-        rows[0].local_id, local_id,
-        "the reply finds its row by the local id"
+        machine.state().messages.last().map(|message| message.mid),
+        Some(42),
+        "the server's id moves the row into the confirmed history"
+    );
+}
+
+/// The row the send endpoint confirms must be ordered by its server id, not
+/// appended after whatever arrived while the reply was in flight.
+#[test]
+fn a_confirmed_send_renders_above_a_message_that_arrived_later() {
+    let mut machine = open_bob();
+    type_str(&mut machine, "hello");
+    let local_id = local_id_of(&machine.handle(Event::Key(Key::Enter)));
+
+    // The send reply wins the race and gives the row mid 42.
+    machine.handle(Event::MessageSent {
+        conversation: ConversationId::User(2),
+        local_id,
+        mid: 42,
+        time: at("2026-11-11 11:59:30"),
+    });
+    // A later message gets the next id, 43, and arrives after the reply.
+    machine.handle(Event::MessageReceived(stream_message(
+        43,
+        2,
+        ConversationId::User(1),
+        "刚刚",
+        "2026-11-11 12:00:00",
+    )));
+
+    let bodies: Vec<String> = machine
+        .state()
+        .message_views(now())
+        .into_iter()
+        .map(|view| view.body)
+        .collect();
+    assert_eq!(
+        bodies,
+        vec![
+            "早上好".to_string(),
+            "hello".to_string(),
+            "刚刚".to_string()
+        ],
+        "message ids are the render order: 21, 42, 43"
     );
 }
 
