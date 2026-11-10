@@ -81,7 +81,14 @@ fn the_first_conversation_opens_as_soon_as_the_list_arrives() {
 
     assert_eq!(
         effects,
-        vec![Effect::LoadMessages { peer: 2 }],
+        vec![
+            // Opening is reading: the position goes to the server first.
+            Effect::ReportRead {
+                conversation: ConversationId::User(2),
+                mid: 21,
+            },
+            Effect::LoadMessages { peer: 2 },
+        ],
         "the highlighted row's history is requested without another keypress"
     );
     assert_eq!(machine.state().active, Some(ConversationId::User(2)));
@@ -105,7 +112,16 @@ fn moving_to_another_row_switches_the_pane_and_drops_the_previous_history() {
 
     let effects = machine.handle(Event::Key(Key::Down));
 
-    assert_eq!(effects, vec![Effect::LoadMessages { peer: 3 }]);
+    assert_eq!(
+        effects,
+        vec![
+            Effect::ReportRead {
+                conversation: ConversationId::User(3),
+                mid: 20,
+            },
+            Effect::LoadMessages { peer: 3 },
+        ]
+    );
     assert_eq!(machine.state().active, Some(ConversationId::User(3)));
     assert_eq!(
         machine.state().selected_conversation().map(|row| row.id),

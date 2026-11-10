@@ -6,6 +6,7 @@
 //! makes login transitions, list ordering, unread markers, and re-login timing
 //! testable without a terminal or a server.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
@@ -281,6 +282,16 @@ pub enum Event {
     ConversationsRefreshed {
         items: Vec<Conversation>,
     },
+    /// The server accepted a read position. Nothing is recomputed locally: the
+    /// unread count is the server's, so only a list refresh follows.
+    ReadReported,
+    /// The server rejected a read position. `mid` names the position that has to
+    /// be retried later; the message is already human-readable.
+    ReadReportFailed {
+        conversation: ConversationId,
+        mid: i64,
+        message: String,
+    },
     /// A push connection is open and delivering bytes. The first one after
     /// login is not a reconnect; any one after a [`Event::LinkDown`] is.
     LinkUp,
@@ -327,6 +338,13 @@ pub enum Effect {
     /// Fetch the direct-message history for one peer (`GET /user/{peer}/history`).
     LoadMessages {
         peer: i32,
+    },
+    /// `PUT /ri`: tell the server this conversation is read up to `mid`. The
+    /// server derives the unread count from it, so this is the only way an open
+    /// conversation becomes read.
+    ReportRead {
+        conversation: ConversationId,
+        mid: i64,
     },
     /// `PUT /user/{peer}/send`. `local_id` correlates the optimistic row with the
     /// [`Event::MessageSent`] / [`Event::MessageSendFailed`] that follows.
@@ -663,6 +681,10 @@ pub struct Machine {
     relogin_inflight: bool,
     /// Time left before the debounced conversation-list refresh fires.
     refresh_due: Option<Duration>,
+    /// The highest message id already reported read, per conversation. Reporting
+    /// is advance-only, so opening, loading history, and every stream message
+    /// cannot turn into the same report twice.
+    reported: HashMap<ConversationId, i64>,
 }
 
 impl Default for Machine {
@@ -678,6 +700,7 @@ impl Machine {
             since_login: Duration::ZERO,
             relogin_inflight: false,
             refresh_due: None,
+            reported: HashMap::new(),
         }
     }
 
@@ -771,6 +794,12 @@ impl Machine {
             Event::Chat(chat) => self.chat_received(chat),
             Event::PeerLoaded { uid, name } => self.peer_loaded(uid, name),
             Event::ConversationsRefreshed { items } => self.conversations_refreshed(items),
+            Event::ReadReported => self.read_reported(),
+            Event::ReadReportFailed {
+                conversation,
+                mid,
+                message,
+            } => self.read_report_failed(conversation, mid, message),
             Event::LinkUp => self.link_up(),
             Event::LinkDown => self.link_down(),
             Event::CatchUpLoaded {
@@ -1139,6 +1168,7 @@ impl Machine {
         self.state.message_scroll_up = 0;
         self.state.open_peer_name = Some(user.name);
         // If the peer happened to have a row already, move the highlight to it.
+        let mut effects = Vec::new();
         if let Some(index) = self
             .state
             .conversations
@@ -1146,8 +1176,14 @@ impl Machine {
             .position(|row| row.id == ConversationId::User(peer))
         {
             self.state.selected = index;
+            // The row knows a position even before the history arrives; opening
+            // through `/open` reads the conversation exactly like a list
+            // switch does. A peer with no row has nothing to report yet.
+            let mid = self.state.conversations[index].mid;
+            effects = self.report_read(ConversationId::User(peer), mid);
         }
-        vec![Effect::LoadMessages { peer }]
+        effects.push(Effect::LoadMessages { peer });
+        effects
     }
 
     fn friend_request_sent(&mut self, target: String, outcome: SendOutcome) -> Vec<Effect> {
@@ -1350,6 +1386,8 @@ impl Machine {
         self.since_login = Duration::ZERO;
         self.relogin_inflight = false;
         self.refresh_due = None;
+        // A new session knows nothing about what the previous one reported.
+        self.reported.clear();
         vec![Effect::LoadHistory { page: 1 }]
     }
 
@@ -1426,7 +1464,9 @@ impl Machine {
         match conversation.id {
             ConversationId::User(peer) => {
                 self.state.messages_loading = true;
-                vec![Effect::LoadMessages { peer }]
+                let mut effects = self.report_read(conversation.id, conversation.mid);
+                effects.push(Effect::LoadMessages { peer });
+                effects
             }
             ConversationId::Group(_) => {
                 // Group chat is phase two in the spec. A direct-message history
@@ -1467,7 +1507,10 @@ impl Machine {
         self.state.messages_loading = false;
         self.state.message_scroll_up = 0;
         self.state.status = None;
-        Vec::new()
+        // History can be newer than the list row that opened it (the two
+        // endpoints are read at different times). Whatever the pane now shows
+        // is what the user has read.
+        self.report_newest_read(conversation)
     }
 
     fn messages_failed(&mut self, conversation: ConversationId, message: String) -> Vec<Effect> {
@@ -1552,7 +1595,13 @@ impl Machine {
             // The list is the server's to order; refresh it (debounced) instead
             // of trusting the local summary forever.
             self.schedule_refresh();
-            return Vec::new();
+            // The pane shows it, so the user has read it. My own echo is
+            // skipped: the send endpoint already wrote the read index for it.
+            return if mine {
+                Vec::new()
+            } else {
+                self.report_read(conversation, mid)
+            };
         }
 
         let mut effects = Vec::new();
@@ -1661,6 +1710,77 @@ impl Machine {
     /// Start (or restart) the debounce window for a list refresh.
     fn schedule_refresh(&mut self) {
         self.refresh_due = Some(REFRESH_DEBOUNCE);
+    }
+
+    /// The server accepted a read position.
+    ///
+    /// Nothing is recomputed locally — the unread count is the server's logic —
+    /// so the only visible consequence is the authoritative list refresh that
+    /// carries the count the report just changed.
+    fn read_reported(&mut self) -> Vec<Effect> {
+        if !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        self.schedule_refresh();
+        Vec::new()
+    }
+
+    fn read_report_failed(
+        &mut self,
+        conversation: ConversationId,
+        mid: i64,
+        message: String,
+    ) -> Vec<Effect> {
+        if !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        // Nothing was accepted, so the position does not count as reported: the
+        // next open, history load, or stream message retries it.
+        if self.reported.get(&conversation) == Some(&mid) {
+            self.reported.remove(&conversation);
+        }
+        // Never a dialog and never a blocked input: only the status line, and
+        // only the server's own text — the ids stay inside the client.
+        self.state.status = Some(format!("已读状态同步失败：{message}"));
+        Vec::new()
+    }
+
+    /// Report the newest message currently in the pane, if it advances.
+    ///
+    /// Both ways the pane gains history (the initial load and the reconnect
+    /// catch-up) end here, so a message the user can see is never left unread.
+    fn report_newest_read(&mut self, conversation: ConversationId) -> Vec<Effect> {
+        match self.state.messages.iter().map(|message| message.mid).max() {
+            Some(newest) => self.report_read(conversation, newest),
+            None => Vec::new(),
+        }
+    }
+
+    /// Ask the server to mark `conversation` read up to `mid`.
+    ///
+    /// Reporting is advance-only: the same or an older position is never sent
+    /// again, so opening, loading history, and every stream message can each ask
+    /// without turning into duplicate requests. The tracker records the position
+    /// as reported *before* the request leaves; a rejection rolls it back so the
+    /// next event retries instead of silently staying unread.
+    fn report_read(&mut self, conversation: ConversationId, mid: i64) -> Vec<Effect> {
+        // Message ids start at 1 (the server's sled sequence), so there is no
+        // position to report before the first message. Reporting one anyway
+        // would make the server upsert a row for the peer.
+        if mid < 1 {
+            return Vec::new();
+        }
+        if self
+            .reported
+            .get(&conversation)
+            .copied()
+            .unwrap_or(i64::MIN)
+            >= mid
+        {
+            return Vec::new();
+        }
+        self.reported.insert(conversation, mid);
+        vec![Effect::ReportRead { conversation, mid }]
     }
 
     /// Refresh the last-message summary of a row that is already in the list.
@@ -2012,7 +2132,9 @@ impl Machine {
                     if items.iter().any(|item| item.mid == mid)))
         });
         merge_history(&mut self.state.messages, items);
-        Vec::new()
+        // The messages missed during the outage are on screen now, so the open
+        // conversation is read up to them as well.
+        self.report_newest_read(conversation)
     }
 
     /// The catch-up request itself failed (the redial worked). Keep the pane and
