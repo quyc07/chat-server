@@ -10,7 +10,7 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, StatusCode};
 use serde_json::json;
 
-use crate::model::{self, Conversation, LoginWire};
+use crate::model::{self, Conversation, LoginWire, Message};
 
 /// How long a request may take before the UI reports the server unreachable.
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -167,6 +167,20 @@ impl ApiClient {
         let response = request.send().await.map_err(map_send_error)?;
         let body = read_body(response).await?;
         model::conversations_from_json(&body).map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// `GET /user/{peer}/history`: the direct-message history with one peer, at
+    /// most 1000 rows, oldest first. The endpoint has no pagination parameters and
+    /// requires friendship; a non-friend peer comes back as a 404 carrying the
+    /// server's own explanation.
+    pub async fn messages(&self, peer: i32) -> Result<Vec<Message>, ApiError> {
+        let mut request = self.http.get(self.url(&format!("/user/{peer}/history")));
+        if let Some(token) = &self.token {
+            request = request.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+        let response = request.send().await.map_err(map_send_error)?;
+        let body = read_body(response).await?;
+        model::messages_from_json(&body).map_err(|e| ApiError::Decode(e.to_string()))
     }
 
     fn url(&self, path: &str) -> String {

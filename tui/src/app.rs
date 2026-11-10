@@ -94,6 +94,25 @@ async fn event_loop(
                         let _ = tx.send(event);
                     });
                 }
+                Effect::LoadMessages { peer } => {
+                    let api = api.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let conversation = crate::model::ConversationId::User(peer);
+                        let event = match api.messages(peer).await {
+                            Ok(items) => Event::MessagesLoaded {
+                                conversation,
+                                items,
+                            },
+                            Err(ApiError::Unauthorized(_)) => Event::TokenExpired,
+                            Err(error) => Event::MessagesFailed {
+                                conversation,
+                                message: error.message(),
+                            },
+                        };
+                        let _ = tx.send(event);
+                    });
+                }
                 Effect::Relogin { name, password } => {
                     let mut api = api.clone();
                     let tx = tx.clone();
@@ -183,6 +202,8 @@ fn map_key(key: KeyEvent) -> Option<Key> {
         KeyCode::Enter => Some(Key::Enter),
         KeyCode::Up => Some(Key::Up),
         KeyCode::Down => Some(Key::Down),
+        KeyCode::PageUp => Some(Key::PageUp),
+        KeyCode::PageDown => Some(Key::PageDown),
         KeyCode::Esc => Some(Key::Esc),
         KeyCode::F(2) => Some(Key::ToggleMode),
         _ => None,

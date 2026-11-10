@@ -12,6 +12,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
+use crate::model::MessageView;
 use crate::state::{Focus, LayoutMode, LoginMode, RowView, Screen, State};
 
 pub fn draw(frame: &mut Frame, state: &State) {
@@ -118,8 +119,33 @@ fn draw_conversations(frame: &mut Frame, area: Rect, state: &State) {
     }
     let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
     let header = chunks[0];
-    let list_area = chunks[1];
+    let body = chunks[1];
+    draw_conversations_header(frame, header, state);
+    if body.height == 0 || body.width == 0 {
+        return;
+    }
+    let (list_area, messages_area) = match state.layout_mode() {
+        // Too little width for two columns: stack the panes instead.
+        LayoutMode::Compact => {
+            let rows = Layout::vertical([Constraint::Percentage(45), Constraint::Percentage(55)])
+                .split(body);
+            (rows[0], rows[1])
+        }
+        _ => {
+            let columns =
+                Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
+                    .split(body);
+            (columns[0], columns[1])
+        }
+    };
+    draw_conversation_list(frame, list_area, state);
+    draw_message_pane(frame, messages_area, state);
+}
 
+fn draw_conversations_header(frame: &mut Frame, area: Rect, state: &State) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
     let who = state.user_name().unwrap_or("?");
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -128,13 +154,21 @@ fn draw_conversations(frame: &mut Frame, area: Rect, state: &State) {
             Span::styled(who.to_string(), Style::default().fg(Color::DarkGray)),
             Span::raw("   "),
             Span::styled(
-                "↑/↓ 选择 · 到底部加载更多 · q 退出",
+                "↑/↓ 选择 · Enter 重新加载 · PgUp/PgDn 滚动消息 · q 退出",
                 Style::default().fg(Color::DarkGray),
             ),
         ])),
-        header,
+        area,
     );
+}
 
+fn draw_conversation_list(frame: &mut Frame, area: Rect, state: &State) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let block = Block::default().borders(Borders::ALL).title(" 会话 ");
+    let list_area = block.inner(area);
+    frame.render_widget(block, area);
     if list_area.height == 0 || list_area.width == 0 {
         return;
     }
@@ -164,6 +198,84 @@ fn draw_conversations(frame: &mut Frame, area: Rect, state: &State) {
     let mut list_state = ListState::default();
     list_state.select(Some(state.selected.min(state.conversations.len() - 1)));
     frame.render_stateful_widget(list, list_area, &mut list_state);
+}
+
+fn draw_message_pane(frame: &mut Frame, area: Rect, state: &State) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let title = match state.active_conversation() {
+        Some(conversation) => format!(" {} ", conversation.title),
+        None => " 消息 ".to_string(),
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    if state.messages.is_empty() {
+        let hint = if state.messages_loading {
+            "加载聊天记录中…"
+        } else if state.active.is_some() {
+            "暂无消息"
+        } else {
+            "从左侧选择一位好友"
+        };
+        frame.render_widget(
+            Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+            inner,
+        );
+        return;
+    }
+
+    let now = Local::now().naive_local();
+    let mut lines = Vec::with_capacity(state.messages.len() * 3);
+    for view in state.message_views(now) {
+        lines.extend(message_lines(view));
+    }
+    // The paragraph wraps every line (CJK included) to the pane width. The state
+    // machine only says how many lines to scroll up from the newest message;
+    // turning that into a top offset is layout, so it happens here.
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let total_lines = paragraph.line_count(inner.width);
+    let max_top = total_lines.saturating_sub(inner.height as usize);
+    let top = max_top.saturating_sub(state.message_scroll_up as usize);
+    let top = top.min(u16::MAX as usize) as u16;
+    frame.render_widget(paragraph.scroll((top, 0)), inner);
+}
+
+/// One message as a header line (who + time) and one or more body lines. The
+/// body is handed to the paragraph unwrapped; the paragraph does the width-aware
+/// wrapping so no column is ever overflowed.
+fn message_lines(view: MessageView) -> Vec<Line<'static>> {
+    let (who, who_style, body_style) = if view.mine {
+        (
+            "我".to_string(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Cyan),
+        )
+    } else {
+        (
+            view.sender,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+            Style::default(),
+        )
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("{who} "), who_style),
+        Span::styled(view.time_label, Style::default().fg(Color::DarkGray)),
+    ])];
+    for row in view.body.split('\n') {
+        lines.push(Line::from(Span::styled(format!("  {row}"), body_style)));
+    }
+    lines.push(Line::from(""));
+    lines
 }
 
 fn row_line(row: RowView, compact: bool) -> Line<'static> {
