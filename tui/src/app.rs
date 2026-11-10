@@ -16,9 +16,8 @@ use tokio::sync::watch;
 use tokio::time::{self, Instant, MissedTickBehavior};
 
 use crate::api::{ApiClient, ApiError};
-use crate::model::{self, StreamEvent};
+use crate::link;
 use crate::render;
-use crate::sse;
 use crate::state::{self, Effect, Event, Key, Machine, PAGE_LIMIT};
 
 const TICK: Duration = Duration::from_secs(1);
@@ -49,7 +48,7 @@ async fn event_loop(
     // token the machine currently holds, connecting when one appears and
     // dropping the connection when it changes or disappears.
     let (token_tx, token_rx) = watch::channel::<Option<String>>(None);
-    spawn_stream(tx.clone(), api.clone(), token_rx);
+    link::spawn(tx.clone(), api.clone(), token_rx);
     let mut published_token: Option<String> = None;
 
     if let Ok(size) = terminal.size() {
@@ -117,6 +116,27 @@ async fn event_loop(
                             },
                             Err(ApiError::Unauthorized(_)) => Event::TokenExpired,
                             Err(error) => Event::MessagesFailed {
+                                conversation,
+                                message: error.message(),
+                            },
+                        };
+                        let _ = tx.send(event);
+                    });
+                }
+                Effect::CatchUpMessages { peer } => {
+                    let api = api.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let conversation = crate::model::ConversationId::User(peer);
+                        // The answer is merged by `mid`, never substituted for
+                        // the pane: the redialed stream is already live.
+                        let event = match api.messages(peer).await {
+                            Ok(items) => Event::CatchUpLoaded {
+                                conversation,
+                                items,
+                            },
+                            Err(ApiError::Unauthorized(_)) => Event::TokenExpired,
+                            Err(error) => Event::CatchUpFailed {
                                 conversation,
                                 message: error.message(),
                             },
@@ -315,86 +335,6 @@ fn publish_token(
     }
     *published = token.map(str::to_string);
     let _ = tx.send(published.clone());
-}
-
-/// Own the push connection for the process lifetime. It connects once a login
-/// installs a token, drops the connection when that token is replaced or
-/// cleared, and reconnects with the new token.
-fn spawn_stream(
-    tx: UnboundedSender<Event>,
-    api: ApiClient,
-    mut tokens: watch::Receiver<Option<String>>,
-) {
-    tokio::spawn(async move {
-        let mut current = tokens.borrow().clone();
-        loop {
-            if let Some(token) = current.clone() {
-                stream_once(&tx, &api, &token, &mut tokens).await;
-                if tx.is_closed() {
-                    return;
-                }
-            }
-            // Reconnect only when the token changes. Reconnect on a dead
-            // connection (heartbeat timeout) belongs to the reconnect ticket.
-            if tokens.changed().await.is_err() {
-                return;
-            }
-            current = tokens.borrow().clone();
-        }
-    });
-}
-
-/// One connection's lifetime: read chunks, frame them, hand messages to the
-/// state machine.
-async fn stream_once(
-    tx: &UnboundedSender<Event>,
-    api: &ApiClient,
-    token: &str,
-    tokens: &mut watch::Receiver<Option<String>>,
-) {
-    let mut response = match api.open_stream(token).await {
-        Ok(response) => response,
-        Err(ApiError::Unauthorized(_)) => {
-            // The stream rejected the token: treat it like any other 401 so the
-            // user is sent back to the login screen.
-            let _ = tx.send(Event::TokenExpired);
-            return;
-        }
-        // Unreachable server: ordinary requests report that. Reconnect policy
-        // arrives in ticket 06.
-        Err(_) => return,
-    };
-
-    let mut parser = sse::Parser::new();
-    loop {
-        if tokens.has_changed().unwrap_or(true) {
-            // Login/logout replaced the token; this connection is stale.
-            return;
-        }
-        let chunk = match response.chunk().await {
-            Ok(Some(chunk)) => chunk,
-            // Clean end, transport error, or unusable body.
-            Ok(None) | Err(_) => return,
-        };
-        let frames = match parser.push(&chunk) {
-            Ok(frames) => frames,
-            Err(_) => return,
-        };
-        for frame in frames {
-            match model::stream_event(&frame.event, &frame.data) {
-                Ok(Some(StreamEvent::Chat(chat))) => {
-                    if tx.send(Event::Chat(chat)).is_err() {
-                        return;
-                    }
-                }
-                // Heartbeats are liveness only; the reconnect ticket consumes
-                // them. Unknown event names are ignored.
-                Ok(Some(StreamEvent::Heartbeat)) | Ok(None) => {}
-                // One malformed frame never takes the whole stream down.
-                Err(_) => {}
-            }
-        }
-    }
 }
 
 fn spawn_ticker(tx: UnboundedSender<Event>) {

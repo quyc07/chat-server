@@ -37,6 +37,25 @@ pub enum Screen {
     Friends,
 }
 
+/// The status line's wording while the push link is being redialed.
+pub const CONNECTION_LOST_STATUS: &str = "连接断开，正在重连";
+
+/// Whether the push connection is delivering bytes.
+///
+/// Silence is otherwise invisible on screen: the pane simply stops updating, so
+/// a down link owns the status line until it is back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Connection {
+    /// No session, or no connection attempted yet. A first successful connect
+    /// is not a reconnect and must not trigger a catch-up.
+    #[default]
+    Idle,
+    /// The last connection opened and is being watched for bytes.
+    Live,
+    /// The connection died; a redial is already scheduled.
+    Down,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LoginMode {
     #[default]
@@ -262,6 +281,24 @@ pub enum Event {
     ConversationsRefreshed {
         items: Vec<Conversation>,
     },
+    /// A push connection is open and delivering bytes. The first one after
+    /// login is not a reconnect; any one after a [`Event::LinkDown`] is.
+    LinkUp,
+    /// The push connection died: a clean end of response (the server's silent
+    /// death) or byte silence (a network drop). A redial is already scheduled.
+    LinkDown,
+    /// The catch-up history request after a reconnect answered. Merged into the
+    /// pane by `mid` instead of replacing it, because the stream may already
+    /// have delivered newer messages while the request was in flight.
+    CatchUpLoaded {
+        conversation: ConversationId,
+        items: Vec<Message>,
+    },
+    /// The catch-up history request failed; the open pane keeps what it has.
+    CatchUpFailed {
+        conversation: ConversationId,
+        message: String,
+    },
 }
 
 /// Work the wiring layer must perform. The state machine has already committed
@@ -321,6 +358,11 @@ pub enum Effect {
     /// Look up a peer's display name for a conversation the list does not know.
     LoadPeer {
         uid: i32,
+    },
+    /// Re-fetch the open conversation's history after a reconnect. The answer
+    /// merges into the pane by message id instead of replacing it.
+    CatchUpMessages {
+        peer: i32,
     },
     Quit,
 }
@@ -473,6 +515,8 @@ pub struct State {
     /// Optimistic sends for every conversation, in the order they were typed.
     /// Only the active conversation's rows are shown.
     pub pending: Vec<PendingMessage>,
+    /// Whether the push connection is delivering bytes.
+    pub connection: Connection,
     session: Option<Session>,
     next_page: u64,
     /// Monotonic id for [`PendingMessage::local_id`].
@@ -500,6 +544,7 @@ impl State {
             message_scroll_up: 0,
             input: String::new(),
             pending: Vec::new(),
+            connection: Connection::Idle,
             session: None,
             next_page: 1,
             next_local_id: 0,
@@ -590,6 +635,22 @@ impl State {
         } else {
             LayoutMode::Full
         }
+    }
+
+    /// What the status line must show this frame.
+    ///
+    /// A down push link outranks ordinary hints: without it, silence on screen
+    /// reads as "the other side is quiet" instead of "we are reconnecting".
+    /// Ordinary messages are appended, not replaced, so a send failure during
+    /// the outage still reaches the user.
+    pub fn status_line(&self) -> Option<String> {
+        if self.screen == Screen::Conversations && self.connection == Connection::Down {
+            return Some(match self.status.as_deref() {
+                Some(message) => format!("{CONNECTION_LOST_STATUS} · {message}"),
+                None => CONNECTION_LOST_STATUS.to_string(),
+            });
+        }
+        self.status.clone()
     }
 }
 
@@ -710,6 +771,16 @@ impl Machine {
             Event::Chat(chat) => self.chat_received(chat),
             Event::PeerLoaded { uid, name } => self.peer_loaded(uid, name),
             Event::ConversationsRefreshed { items } => self.conversations_refreshed(items),
+            Event::LinkUp => self.link_up(),
+            Event::LinkDown => self.link_down(),
+            Event::CatchUpLoaded {
+                conversation,
+                items,
+            } => self.catch_up_loaded(conversation, items),
+            Event::CatchUpFailed {
+                conversation,
+                message,
+            } => self.catch_up_failed(conversation, message),
         }
     }
 
@@ -1275,6 +1346,7 @@ impl Machine {
         self.state.friends = FriendsState::default();
         self.state.next_page = 2;
         self.state.loading = true;
+        self.state.connection = Connection::Idle;
         self.since_login = Duration::ZERO;
         self.relogin_inflight = false;
         self.refresh_due = None;
@@ -1803,6 +1875,7 @@ impl Machine {
         self.state.loading = false;
         self.state.has_more = false;
         self.state.friends = FriendsState::default();
+        self.state.connection = Connection::Idle;
         self.since_login = Duration::ZERO;
         self.relogin_inflight = false;
         self.refresh_due = None;
@@ -1827,6 +1900,7 @@ impl Machine {
         self.state.loading = false;
         self.state.has_more = false;
         self.state.friends = FriendsState::default();
+        self.state.connection = Connection::Idle;
         self.since_login = Duration::ZERO;
         self.relogin_inflight = false;
         self.refresh_due = None;
@@ -1879,6 +1953,79 @@ impl Machine {
         }
         effects.push(Effect::Quit);
         effects
+    }
+
+    /// A push connection opened. The first one after login is the normal start
+    /// of the stream; one that follows a drop is a reconnect and owes the user
+    /// whatever was said while the link was down.
+    fn link_up(&mut self) -> Vec<Effect> {
+        if !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        let reconnected = self.state.connection == Connection::Down;
+        self.state.connection = Connection::Live;
+        if !reconnected {
+            return Vec::new();
+        }
+        // The pane and the unread badges both went stale while the stream was
+        // down; ask the server instead of guessing. The list refresh is what
+        // makes unread counts accurate again.
+        let mut effects = Vec::new();
+        if let Some(ConversationId::User(peer)) = self.state.active {
+            effects.push(Effect::CatchUpMessages { peer });
+        }
+        effects.push(Effect::RefreshConversations);
+        effects
+    }
+
+    /// The push link died. The wiring has already scheduled a redial; the only
+    /// visible job here is telling the user why the screen will not update.
+    fn link_down(&mut self) -> Vec<Effect> {
+        if !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        self.state.connection = Connection::Down;
+        Vec::new()
+    }
+
+    /// A post-reconnect history snapshot arrived. Unlike opening a conversation,
+    /// this cannot replace the pane: the redialed stream is already live, so the
+    /// pane may hold messages newer than the snapshot. Merge by `mid`, which is
+    /// globally unique, and let the server's copy win a collision.
+    fn catch_up_loaded(
+        &mut self,
+        conversation: ConversationId,
+        items: Vec<Message>,
+    ) -> Vec<Effect> {
+        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        if self.state.active != Some(conversation) {
+            // The user opened another conversation while this was in flight.
+            return Vec::new();
+        }
+        // An optimistic row the refetched history already contains is confirmed
+        // history now; dropping it is what keeps it from being drawn twice.
+        self.state.pending.retain(|row| {
+            !(row.conversation == conversation
+                && matches!(row.delivery, Delivery::Confirmed { mid, .. }
+                    if items.iter().any(|item| item.mid == mid)))
+        });
+        merge_history(&mut self.state.messages, items);
+        Vec::new()
+    }
+
+    /// The catch-up request itself failed (the redial worked). Keep the pane and
+    /// say so on the status line; the next reconnect retries.
+    fn catch_up_failed(&mut self, conversation: ConversationId, message: String) -> Vec<Effect> {
+        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        if self.state.active != Some(conversation) {
+            return Vec::new();
+        }
+        self.state.status = Some(format!("补拉聊天记录失败：{message}"));
+        Vec::new()
     }
 }
 
@@ -1952,6 +2099,26 @@ fn merge_conversations(existing: &mut Vec<Conversation>, incoming: Vec<Conversat
             None => existing.push(item),
         }
     }
+}
+
+/// Fold a freshly fetched history into the messages already on screen.
+///
+/// Used only for the post-reconnect catch-up: the redialed stream is live while
+/// the request is in flight, so the pane can already hold messages newer than
+/// the snapshot. Replacing would lose them; appending would duplicate the ones
+/// the snapshot also contains. `mid` is a single global sequence, so it is the
+/// identity to dedupe on, and the server's copy wins a collision because it
+/// carries the server's timestamp and sender name.
+fn merge_history(existing: &mut Vec<Message>, fetched: Vec<Message>) {
+    let known: std::collections::HashSet<i64> = fetched.iter().map(|row| row.mid).collect();
+    let mut merged = fetched;
+    merged.extend(
+        existing
+            .drain(..)
+            .filter(|message| !known.contains(&message.mid)),
+    );
+    merged.sort_by_key(|message| message.mid);
+    *existing = merged;
 }
 
 /// Everything the render layer needs to draw a row, decided here so it can be
