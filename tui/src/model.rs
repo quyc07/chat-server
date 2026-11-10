@@ -154,6 +154,74 @@ pub fn conversations_from_json(body: &[u8]) -> Result<Vec<Conversation>, WireErr
     rows.into_iter().map(WireChatVo::into_domain).collect()
 }
 
+/// One historical message in the open conversation, oldest first.
+///
+/// The direct-message history endpoint sends this concept flat
+/// (`mid`, `msg`, `time`, `from_uid`, `from_name`), unlike the conversation
+/// list's nested enum. This module is the only place that knows either shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Message {
+    pub mid: i64,
+    pub from_uid: i32,
+    pub from_name: String,
+    pub body: String,
+    /// Local wall-clock time, as the server sent it.
+    pub time: NaiveDateTime,
+}
+
+impl Message {
+    /// Decide how the bubble is presented. Rendering only paints this.
+    pub fn view(&self, me: &str, now: NaiveDateTime) -> MessageView {
+        MessageView {
+            sender: self.from_name.clone(),
+            mine: self.from_name == me,
+            time_label: time_label(self.time, now),
+            body: self.body.clone(),
+        }
+    }
+}
+
+/// Everything the render layer needs to draw one message, decided here so it
+/// can be asserted without a terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageView {
+    pub sender: String,
+    /// True when the logged-in user sent it.
+    pub mine: bool,
+    pub time_label: String,
+    pub body: String,
+}
+
+/// The server's `UserHistoryMsg`, field-for-field.
+#[derive(Debug, Deserialize)]
+struct WireUserHistoryMsg {
+    mid: i64,
+    msg: String,
+    time: String,
+    from_uid: i32,
+    from_name: String,
+}
+
+/// Translate the `GET /user/{uid}/history` body into domain messages.
+///
+/// The endpoint returns at most 1000 rows in chronological order and takes no
+/// pagination parameters.
+pub fn messages_from_json(body: &[u8]) -> Result<Vec<Message>, WireError> {
+    let rows: Vec<WireUserHistoryMsg> =
+        serde_json::from_slice(body).map_err(|e| WireError::Json(e.to_string()))?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(Message {
+                mid: row.mid,
+                from_uid: row.from_uid,
+                from_name: row.from_name,
+                body: row.msg,
+                time: parse_wire_time(&row.time)?,
+            })
+        })
+        .collect()
+}
+
 /// The server's login response. It sends more fields (`access_token_expires`);
 /// unknown fields are ignored on purpose.
 #[derive(Debug, Deserialize)]

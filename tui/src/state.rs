@@ -9,10 +9,13 @@
 use std::fmt;
 use std::time::Duration;
 
-use crate::model::{Conversation, ConversationId};
+use crate::model::{Conversation, ConversationId, Message, MessageView};
 
 /// The server caps `PageReq.limit` at 50; the client asks for as much as allowed.
 pub const PAGE_LIMIT: u64 = 50;
+
+/// How many wrapped lines one PageUp/PageDown moves the message pane.
+pub const MESSAGE_SCROLL_LINES: u16 = 10;
 
 /// The JWT lives for one hour on the server. Replace it well before expiry,
 /// because `/token/renew` cannot rescue an expired token.
@@ -63,6 +66,9 @@ pub enum Key {
     Esc,
     /// Ctrl-C, always quits.
     Quit,
+    /// Scroll the message pane up/down by a page.
+    PageUp,
+    PageDown,
 }
 
 /// Something that happened, translated from the outside world.
@@ -92,6 +98,16 @@ pub enum Event {
         width: u16,
         height: u16,
     },
+    /// History for one conversation arrived. `conversation` guards against a
+    /// response that lands after the user already opened another one.
+    MessagesLoaded {
+        conversation: ConversationId,
+        items: Vec<Message>,
+    },
+    MessagesFailed {
+        conversation: ConversationId,
+        message: String,
+    },
 }
 
 /// Work the wiring layer must perform. The state machine has already committed
@@ -116,6 +132,10 @@ pub enum Effect {
     /// Best-effort server-side logout. The local token is already cleared.
     Logout {
         token: String,
+    },
+    /// Fetch the direct-message history for one peer (`GET /user/{peer}/history`).
+    LoadMessages {
+        peer: i32,
     },
     Quit,
 }
@@ -190,6 +210,14 @@ pub struct State {
     pub has_more: bool,
     pub viewport: Viewport,
     pub quit: bool,
+    /// The conversation whose history is in the right-hand pane.
+    pub active: Option<ConversationId>,
+    /// History of [`State::active`], oldest first. Replaced wholesale on switch.
+    pub messages: Vec<Message>,
+    pub messages_loading: bool,
+    /// Lines scrolled up from the bottom of the message pane. Zero follows the
+    /// newest message; the render layer clamps it to the content height.
+    pub message_scroll_up: u16,
     session: Option<Session>,
     next_page: u64,
 }
@@ -206,6 +234,10 @@ impl State {
             has_more: false,
             viewport: Viewport::default(),
             quit: false,
+            active: None,
+            messages: Vec::new(),
+            messages_loading: false,
+            message_scroll_up: 0,
             session: None,
             next_page: 1,
         }
@@ -225,6 +257,22 @@ impl State {
 
     pub fn selected_conversation(&self) -> Option<&Conversation> {
         self.conversations.get(self.selected)
+    }
+
+    /// The conversation open in the right-hand pane, if it is still in the list.
+    pub fn active_conversation(&self) -> Option<&Conversation> {
+        let active = self.active?;
+        self.conversations.iter().find(|row| row.id == active)
+    }
+
+    /// Presentation of the open conversation's history, classified here so the
+    /// render layer makes no decisions of its own.
+    pub fn message_views(&self, now: chrono::NaiveDateTime) -> Vec<MessageView> {
+        let me = self.user_name().unwrap_or_default();
+        self.messages
+            .iter()
+            .map(|message| message.view(me, now))
+            .collect()
     }
 
     /// How the current window should degrade. Rendering only follows this.
@@ -311,6 +359,14 @@ impl Machine {
                 self.state.viewport = Viewport { width, height };
                 Vec::new()
             }
+            Event::MessagesLoaded {
+                conversation,
+                items,
+            } => self.messages_loaded(conversation, items),
+            Event::MessagesFailed {
+                conversation,
+                message,
+            } => self.messages_failed(conversation, message),
         }
     }
 
@@ -368,17 +424,32 @@ impl Machine {
             Key::Char('q') => self.quit(),
             Key::Up => {
                 self.state.selected = self.state.selected.saturating_sub(1);
-                Vec::new()
+                self.open_selected()
             }
             Key::Down => {
                 if self.state.selected + 1 < self.state.conversations.len() {
                     self.state.selected += 1;
-                    Vec::new()
+                    self.open_selected()
                 } else if self.state.has_more && !self.state.loading {
                     self.load_next_page()
                 } else {
                     Vec::new()
                 }
+            }
+            Key::Enter => self.reload_selected(),
+            Key::PageUp => {
+                self.state.message_scroll_up = self
+                    .state
+                    .message_scroll_up
+                    .saturating_add(MESSAGE_SCROLL_LINES);
+                Vec::new()
+            }
+            Key::PageDown => {
+                self.state.message_scroll_up = self
+                    .state
+                    .message_scroll_up
+                    .saturating_sub(MESSAGE_SCROLL_LINES);
+                Vec::new()
             }
             _ => Vec::new(),
         }
@@ -418,6 +489,7 @@ impl Machine {
         self.state.status = None;
         self.state.conversations.clear();
         self.state.selected = 0;
+        self.clear_open_conversation();
         self.state.next_page = 2;
         self.state.loading = true;
         self.since_login = Duration::ZERO;
@@ -454,10 +526,108 @@ impl Machine {
                 .min(self.state.conversations.len().saturating_sub(1));
         }
         sort_conversations(&mut self.state.conversations);
+        // Sorting (and merging) can move rows; keep the open conversation under
+        // the highlight instead of switching to whatever now sits at its index.
+        if let Some(active) = self.state.active
+            && let Some(index) = self
+                .state
+                .conversations
+                .iter()
+                .position(|row| row.id == active)
+        {
+            self.state.selected = index;
+        }
         self.state.has_more = received as u64 >= PAGE_LIMIT;
         self.state.next_page = page + 1;
         self.state.status = None;
+        let active_still_listed = self
+            .state
+            .active
+            .is_some_and(|active| self.state.conversations.iter().any(|row| row.id == active));
+        if active_still_listed {
+            Vec::new()
+        } else {
+            // First page after login, or the open conversation vanished: open the
+            // highlighted row and ask for its history.
+            self.open_selected()
+        }
+    }
+
+    /// Open the row under the highlight when it differs from the open
+    /// conversation. The old history is dropped immediately so the pane never
+    /// shows one peer's messages under another peer's name.
+    fn open_selected(&mut self) -> Vec<Effect> {
+        let Some(conversation) = self.state.conversations.get(self.state.selected).cloned() else {
+            self.clear_open_conversation();
+            return Vec::new();
+        };
+        if self.state.active == Some(conversation.id) {
+            return Vec::new();
+        }
+        self.clear_open_conversation();
+        self.state.active = Some(conversation.id);
+        self.state.status = None;
+        match conversation.id {
+            ConversationId::User(peer) => {
+                self.state.messages_loading = true;
+                vec![Effect::LoadMessages { peer }]
+            }
+            ConversationId::Group(_) => {
+                // Group chat is phase two in the spec. A direct-message history
+                // request for a group id cannot succeed, so explain instead.
+                self.state.status = Some("群聊功能暂未实现".to_string());
+                Vec::new()
+            }
+        }
+    }
+
+    /// Re-fetch the highlighted conversation even when it is already open
+    /// (Enter retries a failed load).
+    fn reload_selected(&mut self) -> Vec<Effect> {
+        self.state.active = None;
+        self.open_selected()
+    }
+
+    fn messages_loaded(
+        &mut self,
+        conversation: ConversationId,
+        items: Vec<Message>,
+    ) -> Vec<Effect> {
+        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        if self.state.active != Some(conversation) {
+            // The user opened another conversation while this was in flight.
+            return Vec::new();
+        }
+        self.state.messages = items;
+        self.state.messages_loading = false;
+        self.state.message_scroll_up = 0;
+        self.state.status = None;
         Vec::new()
+    }
+
+    fn messages_failed(&mut self, conversation: ConversationId, message: String) -> Vec<Effect> {
+        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        if self.state.active != Some(conversation) {
+            return Vec::new();
+        }
+        // A non-friend peer is a 404 with the server's own reason; show it in the
+        // status line rather than crashing or emptying the list.
+        self.state.messages_loading = false;
+        self.state.status = Some(format!("无法加载聊天记录：{message}"));
+        Vec::new()
+    }
+
+    /// Drop everything private to the open conversation. Used whenever the
+    /// session ends so another account never sees the previous history.
+    fn clear_open_conversation(&mut self) {
+        self.state.active = None;
+        self.state.messages.clear();
+        self.state.messages_loading = false;
+        self.state.message_scroll_up = 0;
     }
 
     fn load_next_page(&mut self) -> Vec<Effect> {
@@ -492,6 +662,7 @@ impl Machine {
         self.state.status = Some(format!("自动续登失败：{message}，请重新登录"));
         self.state.conversations.clear();
         self.state.selected = 0;
+        self.clear_open_conversation();
         self.state.loading = false;
         self.state.has_more = false;
         self.since_login = Duration::ZERO;
@@ -512,6 +683,7 @@ impl Machine {
         self.state.status = Some("登录已过期，请重新登录".to_string());
         self.state.conversations.clear();
         self.state.selected = 0;
+        self.clear_open_conversation();
         self.state.loading = false;
         self.state.has_more = false;
         self.since_login = Duration::ZERO;
