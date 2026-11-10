@@ -13,7 +13,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::model::MessageView;
-use crate::state::{Focus, FriendsFocus, LayoutMode, LoginMode, Notice, RowView, Screen, State};
+use crate::state::{
+    Connection, Focus, FriendsFocus, LayoutMode, LoginMode, Notice, RowView, Screen, State,
+};
 
 pub fn draw(frame: &mut Frame, state: &State) {
     let area = frame.area();
@@ -38,9 +40,8 @@ pub fn draw(frame: &mut Frame, state: &State) {
 
 fn draw_minimal(frame: &mut Frame, area: Rect, state: &State) {
     let status = state
-        .status
-        .as_deref()
-        .unwrap_or_else(|| status_text(state));
+        .status_line()
+        .unwrap_or_else(|| status_text(state).to_string());
     let text = format!(
         "窗口太小 ({}x{})，请放大终端 · {status}",
         area.width, area.height
@@ -507,8 +508,13 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &State) {
         frame.render_widget(Paragraph::new(text).style(style), area);
         return;
     }
-    let (text, style) = match &state.status {
-        Some(message) => (message.clone(), Style::default().fg(Color::Red)),
+    let (text, style) = match state.status_line() {
+        // A down push link is a warning, not a failed request; the ordinary
+        // status text, if any, is appended to it by the state machine.
+        Some(message) if state.connection == Connection::Down => {
+            (message, Style::default().fg(Color::Yellow))
+        }
+        Some(message) => (message, Style::default().fg(Color::Red)),
         None if state.loading => ("加载中…".to_string(), Style::default().fg(Color::DarkGray)),
         None => (
             status_text(state).to_string(),
