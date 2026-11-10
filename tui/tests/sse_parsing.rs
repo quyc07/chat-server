@@ -39,6 +39,10 @@ const ECHO_DATA: &str = r#"{"ChatMessage":{"mid":43,"payload":{"from_uid":1,"cre
 /// A group-targeted message, in the same envelope.
 const GROUP_DATA: &str = r#"{"ChatMessage":{"mid":44,"payload":{"from_uid":3,"created_at":"2026-11-11 09:02:00","target":{"Group":{"gid":7}},"detail":{"Normal":{"content":{"content":"大家好"}}}}}}"#;
 
+/// Exact `data:` bytes captured from the running server for one real message
+/// (bob -> alice, `mid` 1): the regression test below feeds these unmodified.
+const CAPTURED_CHAT_DATA: &str = r#"{"ChatMessage":{"mid":1,"payload":{"from_uid":2,"created_at":"2026-11-11 01:28:19","target":{"User":{"uid":1}},"detail":{"Normal":{"content":{"content":"hello from bob"}}}}}}"#;
+
 /// The server's `Message::Heartbeat(HeartbeatMessage { time })` is wrapped the
 /// same way (`src/event.rs`). The client treats a heartbeat as liveness only and
 /// never reads `time`, so only the envelope tag matters here.
@@ -123,27 +127,27 @@ fn a_line_that_keeps_growing_without_a_newline_does_not_grow_without_bound() {
 
 /// The regression this whole envelope handling exists for: the server's data is
 /// `{"ChatMessage": {mid, payload}}`, and a client that parses the bare
-/// `{mid, payload}` drops every live message.
+/// `{mid, payload}` drops every live message. The input is the capture above.
 #[test]
-fn a_server_serialised_chat_frame_decodes_through_its_enum_envelope() {
-    let data = CHAT_DATA;
+fn a_captured_chat_frame_decodes_through_its_enum_envelope() {
+    let data = CAPTURED_CHAT_DATA;
     assert!(
-        data.starts_with(r#"{"ChatMessage":{"mid":42"#),
+        data.starts_with(r#"{"ChatMessage":{"mid":1"#),
         "the server wraps the message in its externally tagged enum: {data}"
     );
 
     let event = model::stream_event("Chat", data)
-        .expect("a server-serialised Chat frame decodes")
+        .expect("the captured Chat frame decodes")
         .expect("Chat is a known event");
 
     let StreamEvent::MessageReceived(message) = event else {
         panic!("a Chat event must decode to a message");
     };
-    assert_eq!(message.mid, 42);
+    assert_eq!(message.mid, 1);
     assert_eq!(message.from_uid, 2);
     assert_eq!(message.target, ConversationId::User(1));
-    assert_eq!(message.body, "早上好");
-    assert_eq!(message.time, at("2026-11-11 09:00:00"));
+    assert_eq!(message.body, "hello from bob");
+    assert_eq!(message.time, at("2026-11-11 01:28:19"));
 }
 
 #[test]
