@@ -11,7 +11,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chat_tui::model::{self, Conversation, ConversationId, Message, StreamChat, Unread};
+use chat_tui::model::{self, Conversation, ConversationId, FoundUser, Message, StreamChat, Unread};
 use chat_tui::state::{Effect, Event, Key, Machine, REFRESH_DEBOUNCE};
 use chrono::NaiveDateTime;
 
@@ -420,4 +420,86 @@ fn a_new_login_does_not_inherit_the_previous_sessions_read_positions() {
         }),
         "positions reported by the previous session are not assumed to still be read"
     );
+}
+
+/// `/open <name>` reaches the pane through its own path (`open_peer`), not
+/// through the list selection, so it must report the position too.
+#[test]
+fn a_conversation_opened_with_the_open_command_is_reported_as_read() {
+    let mut machine = logged_in(1);
+    with_two_conversations(&mut machine);
+    assert_eq!(
+        machine.state().active,
+        Some(ConversationId::User(2)),
+        "bob's conversation is the open one"
+    );
+
+    type_str(&mut machine, "/open carol");
+    assert_eq!(
+        machine.handle(Event::Key(Key::Enter)),
+        vec![Effect::LookupOpen {
+            query: "carol".to_string(),
+        }]
+    );
+    let effects = machine.handle(Event::OpenUsersFound {
+        query: "carol".to_string(),
+        users: vec![FoundUser {
+            id: 3,
+            name: "carol".to_string(),
+        }],
+    });
+
+    assert_eq!(
+        effects,
+        vec![
+            Effect::ReportRead {
+                conversation: ConversationId::User(3),
+                mid: 20,
+            },
+            Effect::LoadMessages { peer: 3 },
+        ],
+        "opening carol with /open marks her conversation read, like a list switch"
+    );
+
+    let effects = machine.handle(Event::MessagesLoaded {
+        conversation: ConversationId::User(3),
+        items: vec![message(45, 3, "carol", "刚发的", "2026-11-11 12:00:00")],
+    });
+    assert_eq!(
+        effects,
+        vec![Effect::ReportRead {
+            conversation: ConversationId::User(3),
+            mid: 45,
+        }],
+        "and the history the pane shows advances the position"
+    );
+}
+
+/// `/open` can reach a peer the server has never recorded. There is no position
+/// to report — the send endpoint writes the read index for the first message.
+#[test]
+fn a_conversation_opened_with_the_open_command_and_no_history_reports_nothing() {
+    let mut machine = logged_in(1);
+    with_two_conversations(&mut machine);
+    type_str(&mut machine, "/open 张三");
+    machine.handle(Event::Key(Key::Enter));
+
+    let effects = machine.handle(Event::OpenUsersFound {
+        query: "张三".to_string(),
+        users: vec![FoundUser {
+            id: 9,
+            name: "张三".to_string(),
+        }],
+    });
+    assert_eq!(
+        effects,
+        vec![Effect::LoadMessages { peer: 9 }],
+        "no row and no history means no position to report"
+    );
+
+    let effects = machine.handle(Event::MessagesLoaded {
+        conversation: ConversationId::User(9),
+        items: vec![],
+    });
+    assert!(effects.is_empty(), "an empty history still has no position");
 }

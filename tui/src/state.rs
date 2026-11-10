@@ -1097,6 +1097,7 @@ impl Machine {
         self.state.message_scroll_up = 0;
         self.state.open_peer_name = Some(user.name);
         // If the peer happened to have a row already, move the highlight to it.
+        let mut effects = Vec::new();
         if let Some(index) = self
             .state
             .conversations
@@ -1104,8 +1105,14 @@ impl Machine {
             .position(|row| row.id == ConversationId::User(peer))
         {
             self.state.selected = index;
+            // The row knows a position even before the history arrives; opening
+            // through `/open` reads the conversation exactly like a list
+            // switch does. A peer with no row has nothing to report yet.
+            let mid = self.state.conversations[index].mid;
+            effects = self.report_read(ConversationId::User(peer), mid);
         }
-        vec![Effect::LoadMessages { peer }]
+        effects.push(Effect::LoadMessages { peer });
+        effects
     }
 
     fn friend_request_sent(&mut self, target: String, outcome: SendOutcome) -> Vec<Effect> {
