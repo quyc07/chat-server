@@ -11,11 +11,17 @@ use std::time::Duration;
 
 use crate::model::{
     Conversation, ConversationId, FoundUser, Friend, FriendDecision, FriendRequest,
-    FriendRequestStatus, Message, MessageView, ReviewOutcome, SendOutcome,
+    FriendRequestStatus, Message, MessageView, ReviewOutcome, SendOutcome, StreamChat, Unread,
 };
 
 /// The server caps `PageReq.limit` at 50; the client asks for as much as allowed.
 pub const PAGE_LIMIT: u64 = 50;
+
+/// How long to wait after the latest incoming message before re-pulling the
+/// conversation list. The list's order and unread counts are server logic; the
+/// client only refreshes them, never recomputes them, and this delay keeps a
+/// burst of messages from turning into a burst of requests.
+pub const REFRESH_DEBOUNCE: Duration = Duration::from_millis(1500);
 
 /// How many wrapped lines one PageUp/PageDown moves the message pane.
 pub const MESSAGE_SCROLL_LINES: u16 = 10;
@@ -204,6 +210,20 @@ pub enum Event {
         outcome: ReviewOutcome,
     },
     FriendRequestReviewFailed(String),
+    /// One chat message arrived on the event stream. The server has already
+    /// filtered it to messages addressed to or sent by this user.
+    Chat(StreamChat),
+    /// `GET /user/detail/{uid}` answered for a peer whose conversation was not
+    /// in the list yet.
+    PeerLoaded {
+        uid: i32,
+        name: String,
+    },
+    /// The debounced conversation-list refresh finished. The rows are the
+    /// server's authority on order, previews, and unread counts.
+    ConversationsRefreshed {
+        items: Vec<Conversation>,
+    },
 }
 
 /// Work the wiring layer must perform. The state machine has already committed
@@ -252,6 +272,12 @@ pub enum Effect {
         request: FriendRequest,
         decision: FriendDecision,
     },
+    /// Re-pull the first page of the conversation list after stream activity.
+    RefreshConversations,
+    /// Look up a peer's display name for a conversation the list does not know.
+    LoadPeer {
+        uid: i32,
+    },
     Quit,
 }
 
@@ -284,6 +310,9 @@ impl Default for Viewport {
 /// 50-minute re-login can replace the token without asking the user again.
 pub struct Session {
     token: String,
+    /// The caller's own id, read out of the JWT payload. `None` only when the
+    /// token is not a decodable JWT, which the server never sends.
+    uid: Option<i32>,
     name: String,
     password: String,
 }
@@ -295,6 +324,10 @@ impl Session {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn uid(&self) -> Option<i32> {
+        self.uid
     }
 
     fn password(&self) -> &str {
@@ -429,6 +462,11 @@ impl State {
         self.session.as_ref().map(Session::name)
     }
 
+    /// The logged-in user's own id. This, not the name, decides authorship.
+    pub fn user_uid(&self) -> Option<i32> {
+        self.session.as_ref().and_then(Session::uid)
+    }
+
     pub fn is_logged_in(&self) -> bool {
         self.session.is_some()
     }
@@ -449,7 +487,8 @@ impl State {
     /// Optimistic rows follow the confirmed history because they are the newest
     /// thing the user did; rows belonging to another conversation are skipped.
     pub fn message_views(&self, now: chrono::NaiveDateTime) -> Vec<MessageView> {
-        let me = self.user_name().unwrap_or_default();
+        let me = self.user_uid();
+        let name = self.user_name().unwrap_or_default();
         let mut views: Vec<MessageView> = self
             .messages
             .iter()
@@ -460,7 +499,7 @@ impl State {
                 self.pending
                     .iter()
                     .filter(|row| row.conversation == active)
-                    .map(|row| row.view(me, now)),
+                    .map(|row| row.view(name, now)),
             );
         }
         views
@@ -485,6 +524,8 @@ pub struct Machine {
     since_login: Duration,
     /// A re-login request is on the wire; never queue a second one.
     relogin_inflight: bool,
+    /// Time left before the debounced conversation-list refresh fires.
+    refresh_due: Option<Duration>,
 }
 
 impl Default for Machine {
@@ -499,6 +540,7 @@ impl Machine {
             state: State::new(),
             since_login: Duration::ZERO,
             relogin_inflight: false,
+            refresh_due: None,
         }
     }
 
@@ -587,6 +629,9 @@ impl Machine {
                 outcome,
             } => self.friend_request_reviewed(request_id, decision, outcome),
             Event::FriendRequestReviewFailed(message) => self.friend_request_review_failed(message),
+            Event::Chat(chat) => self.chat_received(chat),
+            Event::PeerLoaded { uid, name } => self.peer_loaded(uid, name),
+            Event::ConversationsRefreshed { items } => self.conversations_refreshed(items),
         }
     }
 
@@ -1013,8 +1058,12 @@ impl Machine {
         }
         let name = self.state.form.name.clone();
         let password = std::mem::take(&mut self.state.form.password);
+        // The login response has no uid; the JWT payload does. Read it once per
+        // token, here, so the rest of the state machine never parses a JWT.
+        let uid = crate::model::uid_from_token(&token).ok();
         self.state.session = Some(Session {
             token,
+            uid,
             name,
             password,
         });
@@ -1030,6 +1079,7 @@ impl Machine {
         self.state.loading = true;
         self.since_login = Duration::ZERO;
         self.relogin_inflight = false;
+        self.refresh_due = None;
         vec![Effect::LoadHistory { page: 1 }]
     }
 
@@ -1164,6 +1214,205 @@ impl Machine {
         Vec::new()
     }
 
+    /// A message arrived on the push stream. The server has already filtered it
+    /// to messages addressed to or sent by this user, so there is no filter here
+    /// — only the dedupe against rows that already exist and the decision where
+    /// the message belongs.
+    fn chat_received(&mut self, chat: StreamChat) -> Vec<Effect> {
+        if !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        let me = self.state.user_uid();
+        let conversation = chat.conversation(me);
+        let mine = chat.is_mine(me);
+        let from_uid = chat.from_uid;
+        let mid = chat.mid;
+        let preview = crate::model::excerpt(&chat.body);
+        let time = chat.time;
+
+        if self.state.active == Some(conversation) {
+            // The pane already shows this message when the confirmed history has
+            // the mid, or when the send path already promoted the optimistic row
+            // to Confirmed with it. Both must win over the stream copy, or the
+            // sender sees their own message twice.
+            let already_shown = self.state.messages.iter().any(|message| message.mid == mid)
+                || self.state.pending.iter().any(|row| {
+                    row.conversation == conversation
+                        && matches!(
+                            row.delivery,
+                            Delivery::Confirmed { mid: confirmed, .. } if confirmed == mid
+                        )
+                });
+            if already_shown {
+                // The pane is right, but the list summary and the debounced
+                // authoritative refresh must still catch up with my own echo.
+                if mine {
+                    self.update_row_summary(conversation, mid, preview, time);
+                    self.realign_selected();
+                    self.schedule_refresh();
+                }
+                return Vec::new();
+            }
+            // The echo can beat the HTTP send result, in which case the optimistic
+            // row still has no mid and cannot be found by one. Consume the oldest
+            // matching send instead; the late `MessageSent` then finds no row to
+            // confirm, which the send path already treats as reconciled.
+            if mine {
+                let optimistic = self.state.pending.iter().position(|row| {
+                    row.conversation == conversation
+                        && matches!(row.delivery, Delivery::Sending)
+                        && row.body == chat.body
+                });
+                if let Some(index) = optimistic {
+                    self.state.pending.remove(index);
+                }
+            }
+            let from_name = if mine {
+                self.state.user_name().unwrap_or_default().to_string()
+            } else {
+                self.state
+                    .active_conversation()
+                    .map(|row| row.title.clone())
+                    .unwrap_or_else(|| format!("用户 {from_uid}"))
+            };
+            let message = chat.into_message(from_name);
+            self.state.messages.push(message);
+            self.update_row_summary(conversation, mid, preview, time);
+            self.realign_selected();
+            // The list is the server's to order; refresh it (debounced) instead
+            // of trusting the local summary forever.
+            self.schedule_refresh();
+            return Vec::new();
+        }
+
+        let mut effects = Vec::new();
+        match self
+            .state
+            .conversations
+            .iter()
+            .position(|row| row.id == conversation)
+        {
+            Some(index) => {
+                // Two copies of the same event, or an older message: the row
+                // already reflects it.
+                if self.state.conversations[index].mid >= mid {
+                    return Vec::new();
+                }
+                let row = &mut self.state.conversations[index];
+                if !mine {
+                    row.unread = bumped(row.unread);
+                }
+                row.mid = mid;
+                row.preview = preview;
+                row.time = time;
+            }
+            None => {
+                // A conversation the list has never shown. Add it immediately so
+                // the message is visible, and ask for the peer's real name; a
+                // group has no name endpoint in this phase.
+                let title = match conversation {
+                    ConversationId::User(uid) => {
+                        effects.push(Effect::LoadPeer { uid });
+                        format!("用户 {uid}")
+                    }
+                    ConversationId::Group(gid) => format!("群聊 #{gid}"),
+                };
+                self.state.conversations.push(Conversation {
+                    id: conversation,
+                    title,
+                    mid,
+                    preview,
+                    time,
+                    unread: if mine { Unread::None } else { Unread::Count(1) },
+                    last_sender: None,
+                });
+            }
+        }
+        sort_conversations(&mut self.state.conversations);
+        self.realign_selected();
+        self.schedule_refresh();
+        effects
+    }
+
+    /// The peer lookup for a brand-new conversation answered.
+    fn peer_loaded(&mut self, uid: i32, name: String) -> Vec<Effect> {
+        if !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        if let Some(row) = self
+            .state
+            .conversations
+            .iter_mut()
+            .find(|row| row.id == ConversationId::User(uid))
+        {
+            row.title = name;
+        }
+        Vec::new()
+    }
+
+    /// The debounced refresh answered. Rows the server returned replace the
+    /// local copies outright: order, preview, and unread are its logic. Rows
+    /// outside the first page, or seen only on the stream, are kept.
+    fn conversations_refreshed(&mut self, items: Vec<Conversation>) -> Vec<Effect> {
+        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        for item in items {
+            match self
+                .state
+                .conversations
+                .iter()
+                .position(|row| row.id == item.id)
+            {
+                Some(index) => self.state.conversations[index] = item,
+                None => self.state.conversations.push(item),
+            }
+        }
+        sort_conversations(&mut self.state.conversations);
+        self.realign_selected();
+        Vec::new()
+    }
+
+    /// Keep the highlighted index on the open conversation after the order
+    /// changed, so the list never moves the highlight to a different peer.
+    fn realign_selected(&mut self) {
+        if let Some(active) = self.state.active
+            && let Some(index) = self
+                .state
+                .conversations
+                .iter()
+                .position(|row| row.id == active)
+        {
+            self.state.selected = index;
+        }
+        clamp(&mut self.state.selected, self.state.conversations.len());
+    }
+
+    /// Start (or restart) the debounce window for a list refresh.
+    fn schedule_refresh(&mut self) {
+        self.refresh_due = Some(REFRESH_DEBOUNCE);
+    }
+
+    /// Refresh the last-message summary of a row that is already in the list.
+    fn update_row_summary(
+        &mut self,
+        conversation: ConversationId,
+        mid: i64,
+        preview: String,
+        time: chrono::NaiveDateTime,
+    ) {
+        if let Some(row) = self
+            .state
+            .conversations
+            .iter_mut()
+            .find(|row| row.id == conversation)
+        {
+            row.mid = mid;
+            row.preview = preview;
+            row.time = time;
+        }
+    }
+
     /// Take the message box's text and send it to the open direct conversation.
     ///
     /// The row is appended before the request leaves, so the flow never waits for
@@ -1283,6 +1532,8 @@ impl Machine {
         let Some(session) = self.state.session.as_mut() else {
             return Vec::new();
         };
+        // A new token carries its own claims; re-read the uid once, as at login.
+        session.uid = crate::model::uid_from_token(&token).ok();
         session.token = token;
         self.relogin_inflight = false;
         self.since_login = Duration::ZERO;
@@ -1311,6 +1562,7 @@ impl Machine {
         self.state.friends = FriendsState::default();
         self.since_login = Duration::ZERO;
         self.relogin_inflight = false;
+        self.refresh_due = None;
         Vec::new()
     }
 
@@ -1334,31 +1586,49 @@ impl Machine {
         self.state.friends = FriendsState::default();
         self.since_login = Duration::ZERO;
         self.relogin_inflight = false;
+        self.refresh_due = None;
         Vec::new()
     }
 
     fn tick(&mut self, elapsed: Duration) -> Vec<Effect> {
+        // The debounced list refresh is independent of the re-login timer.
+        let mut effects = self.tick_refresh(elapsed);
         if !matches!(self.state.screen, Screen::Conversations | Screen::Friends)
             || !self.state.is_logged_in()
             || self.relogin_inflight
         {
-            return Vec::new();
+            return effects;
         }
         self.since_login += elapsed;
         if self.since_login < RELOGIN_AFTER {
-            return Vec::new();
+            return effects;
         }
         let Some(session) = self.state.session.as_ref() else {
-            return Vec::new();
+            return effects;
         };
         let name = session.name.clone();
         let password = session.password().to_string();
         self.relogin_inflight = true;
-        vec![Effect::Relogin { name, password }]
+        effects.push(Effect::Relogin { name, password });
+        effects
+    }
+
+    /// Count down the debounce window and ask for one refresh when it closes.
+    fn tick_refresh(&mut self, elapsed: Duration) -> Vec<Effect> {
+        let Some(remaining) = self.refresh_due else {
+            return Vec::new();
+        };
+        if remaining > elapsed {
+            self.refresh_due = Some(remaining - elapsed);
+            return Vec::new();
+        }
+        self.refresh_due = None;
+        vec![Effect::RefreshConversations]
     }
 
     fn quit(&mut self) -> Vec<Effect> {
         self.state.quit = true;
+        self.refresh_due = None;
         let token = self.state.session.take().map(|session| session.token);
         let mut effects = Vec::new();
         if let Some(token) = token {
@@ -1375,6 +1645,16 @@ fn clamp(selected: &mut usize, len: usize) {
         *selected = 0;
     } else if *selected >= len {
         *selected = len - 1;
+    }
+}
+
+/// One more unread message. "Never read" stays "never read": its badge is a
+/// shape, not a count, so the number behind it does not matter.
+fn bumped(unread: Unread) -> Unread {
+    match unread {
+        Unread::All => Unread::All,
+        Unread::None => Unread::Count(1),
+        Unread::Count(count) => Unread::Count(count.saturating_add(1)),
     }
 }
 

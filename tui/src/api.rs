@@ -54,6 +54,10 @@ impl ApiError {
 #[derive(Clone)]
 pub struct ApiClient {
     http: Client,
+    /// A second client without a total-request timeout, used only for the event
+    /// stream: the shared client's 10-second timeout covers the response body,
+    /// which would tear down a long-lived connection mid-stream.
+    stream_http: Client,
     base_url: String,
     token: Option<String>,
 }
@@ -75,8 +79,13 @@ impl ApiClient {
             .timeout(REQUEST_TIMEOUT)
             .build()
             .expect("reqwest client configuration is valid");
+        let stream_http = Client::builder()
+            .connect_timeout(REQUEST_TIMEOUT)
+            .build()
+            .expect("reqwest client configuration is valid");
         Self {
             http,
+            stream_http,
             base_url,
             token: None,
         }
@@ -203,6 +212,51 @@ impl ApiClient {
             .map_err(map_send_error)?;
         let body = read_body(response).await?;
         model::sent_mid_from_json(&body).map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// `GET /user/detail/{uid}`, the display name of one peer. Used when a
+    /// stream message names a conversation the list has never seen.
+    pub async fn user_detail(&self, uid: i32) -> Result<FoundUser, ApiError> {
+        let response = self
+            .authorized(self.http.get(self.url(&format!("/user/detail/{uid}"))))
+            .send()
+            .await
+            .map_err(map_send_error)?;
+        let body = read_body(response).await?;
+        model::user_detail_from_json(&body).map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// `GET /event/stream?token=...`: the server-sent event connection.
+    ///
+    /// The token goes in the query because this client cannot put an
+    /// `Authorization` header on an event source. The response is returned
+    /// unread; the caller drives its chunks through [`crate::sse::Parser`].
+    pub async fn open_stream(&self, token: &str) -> Result<reqwest::Response, ApiError> {
+        let mut url = reqwest::Url::parse(&self.url("/event/stream"))
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        // A JWT is URL-safe already, but let the URL builder do the encoding so
+        // any future token shape cannot break the query string.
+        url.query_pairs_mut().append_pair("token", token);
+        let response = self
+            .stream_http
+            .get(url)
+            .send()
+            .await
+            .map_err(map_send_error)?;
+        if response.status().is_success() {
+            return Ok(response);
+        }
+        // Only failures are read to completion; a live stream is not.
+        let (status, body) = read_raw(response).await?;
+        let message = server_message(&body);
+        if status == StatusCode::UNAUTHORIZED {
+            Err(ApiError::Unauthorized(message))
+        } else {
+            Err(ApiError::Status {
+                status: status.as_u16(),
+                message,
+            })
+        }
     }
 
     /// `GET /user/find/{name}`, a fuzzy match by name returning id+name pairs.
