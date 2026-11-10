@@ -134,6 +134,33 @@ impl FriendsFocus {
     }
 }
 
+/// The `/open <name>` cold-start flow: a fuzzy lookup that may need the user to
+/// choose among several matches.
+///
+/// It lives beside the conversation list rather than on its own screen because
+/// the command is typed in the same message box: while the chooser is up it owns
+/// the keyboard, and cancelling returns to ordinary typing without losing the
+/// list, history, or draft.
+#[derive(Debug, Clone, Default)]
+pub struct OpenState {
+    /// The submitted lookup text. A reply for a different query is stale and is
+    /// dropped, so a fast retry can never be answered by the previous lookup.
+    pub query: String,
+    /// A lookup is on the wire.
+    pub searching: bool,
+    /// Multiple matches awaiting a choice. Non-empty means the chooser owns the
+    /// keyboard; an empty list means ordinary typing.
+    pub choices: Vec<FoundUser>,
+    pub selected: usize,
+}
+
+impl OpenState {
+    /// True while several users matched and the user must pick one.
+    pub fn choosing(&self) -> bool {
+        !self.choices.is_empty()
+    }
+}
+
 /// The friends screen: one query box and three lists, all decided here.
 #[derive(Debug, Clone, Default)]
 pub struct FriendsState {
@@ -211,6 +238,17 @@ pub enum Event {
         users: Vec<FoundUser>,
     },
     UserSearchFailed(String),
+    /// The `/open <name>` lookup answered. `query` is the text that produced it;
+    /// a reply whose query no longer matches is stale.
+    OpenUsersFound {
+        query: String,
+        users: Vec<FoundUser>,
+    },
+    /// The `/open <name>` lookup failed (network, decode, server refusal).
+    OpenLookupFailed {
+        query: String,
+        message: String,
+    },
     FriendRequestSent {
         target: String,
         outcome: SendOutcome,
@@ -298,6 +336,12 @@ pub enum Effect {
         text: String,
     },
     FindUsers {
+        query: String,
+    },
+    /// `GET /user/find/{name}` for `/open`. A separate effect from [`Effect::FindUsers`]
+    /// because the friends screen has its own query and state; sharing one result
+    /// event would let the two flows answer each other's lookups.
+    LookupOpen {
         query: String,
     },
     SendFriendRequest {
@@ -449,6 +493,12 @@ pub struct State {
     pub loading: bool,
     pub has_more: bool,
     pub friends: FriendsState,
+    /// The `/open <name>` lookup and chooser.
+    pub open: OpenState,
+    /// Name of the active peer when the list has no row for them yet. `/open`
+    /// can open a conversation the server has not recorded, so the pane needs a
+    /// title the list cannot supply.
+    pub open_peer_name: Option<String>,
     pub viewport: Viewport,
     pub quit: bool,
     /// The conversation whose history is in the right-hand pane.
@@ -484,6 +534,8 @@ impl State {
             loading: false,
             has_more: false,
             friends: FriendsState::default(),
+            open: OpenState::default(),
+            open_peer_name: None,
             viewport: Viewport::default(),
             quit: false,
             active: None,
@@ -524,6 +576,30 @@ impl State {
     pub fn active_conversation(&self) -> Option<&Conversation> {
         let active = self.active?;
         self.conversations.iter().find(|row| row.id == active)
+    }
+
+    /// Title for the message pane. A conversation the list knows uses the
+    /// server's title; a peer opened with `/open` but never recorded uses the
+    /// name the lookup returned.
+    pub fn active_title(&self) -> Option<String> {
+        match self.active_conversation() {
+            Some(conversation) => Some(conversation.title.clone()),
+            None => self.open_peer_name.clone(),
+        }
+    }
+
+    /// Which conversation-list row wears the highlight. The open conversation
+    /// wins when it has a row; an open peer the list does not know yet
+    /// highlights nothing rather than a stranger's row.
+    pub fn highlighted_index(&self) -> Option<usize> {
+        if let Some(active) = self.active {
+            return self.conversations.iter().position(|row| row.id == active);
+        }
+        if self.conversations.is_empty() {
+            None
+        } else {
+            Some(self.selected.min(self.conversations.len() - 1))
+        }
     }
 
     /// Presentation of the open conversation's history, classified here so the
@@ -674,6 +750,8 @@ impl Machine {
             } => self.message_send_failed(conversation, local_id, message),
             Event::UsersFound { query, users } => self.users_found(query, users),
             Event::UserSearchFailed(message) => self.user_search_failed(message),
+            Event::OpenUsersFound { query, users } => self.open_users_found(query, users),
+            Event::OpenLookupFailed { query, message } => self.open_lookup_failed(query, message),
             Event::FriendRequestSent { target, outcome } => {
                 self.friend_request_sent(target, outcome)
             }
@@ -756,6 +834,12 @@ impl Machine {
     }
 
     fn handle_conversations_key(&mut self, key: Key) -> Vec<Effect> {
+        // While several `/open` matches are on screen the chooser owns the
+        // keyboard: an arrow must not move the conversation list, and Enter must
+        // not send a half-typed message to whoever was previously open.
+        if self.state.open.choosing() {
+            return self.handle_open_picker_key(key);
+        }
         match key {
             // `q` is no longer a quit key here: the message box owns every
             // printable character, so a message may start with q.
@@ -775,9 +859,10 @@ impl Machine {
                     Vec::new()
                 }
             }
-            // Enter is for sending. Ctrl-R (mapped as `ToggleMode`, its login-screen
-            // meaning) retries the history load instead.
-            Key::Enter => self.send_message(),
+            // Enter is for sending, or for a `/open` command typed in the same
+            // box. Parsing happens on submit so `/`, `q`, and CJK text remain
+            // ordinary characters while typing.
+            Key::Enter => self.submit_input(),
             Key::ToggleMode => self.reload_selected(),
             Key::Char(c) => {
                 self.state.input.push(c);
@@ -950,6 +1035,119 @@ impl Machine {
         self.state.friends.searching = false;
         self.state.friends.notice = Some(Notice::Error(message));
         Vec::new()
+    }
+
+    /// Keys while several `/open` matches are on screen.
+    ///
+    /// Esc cancels the chooser instead of quitting: the user asked for a
+    /// conversation and changed their mind, which is not a request to exit. The
+    /// global Ctrl-C (`Key::Quit`) still quits from here.
+    fn handle_open_picker_key(&mut self, key: Key) -> Vec<Effect> {
+        match key {
+            Key::Quit => self.quit(),
+            Key::Esc => {
+                self.state.open = OpenState::default();
+                self.state.status = None;
+                Vec::new()
+            }
+            Key::Up => {
+                self.state.open.selected = self.state.open.selected.saturating_sub(1);
+                Vec::new()
+            }
+            Key::Down => {
+                if self.state.open.selected + 1 < self.state.open.choices.len() {
+                    self.state.open.selected += 1;
+                }
+                Vec::new()
+            }
+            Key::Enter => {
+                let Some(user) = self
+                    .state
+                    .open
+                    .choices
+                    .get(self.state.open.selected)
+                    .cloned()
+                else {
+                    return Vec::new();
+                };
+                self.open_peer(user)
+            }
+            // Printable keys are not a second search box; the lookups are
+            // explicit commands. Ignore them so a stray keystroke cannot pick
+            // somebody by accident.
+            _ => Vec::new(),
+        }
+    }
+
+    /// The `/open` fuzzy lookup answered. The reply is only trusted when it is
+    /// the answer to the lookup currently in flight.
+    fn open_users_found(&mut self, query: String, mut users: Vec<FoundUser>) -> Vec<Effect> {
+        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        if !self.state.open.searching || query != self.state.open.query {
+            // A newer lookup superseded this one, or the flow was cancelled.
+            return Vec::new();
+        }
+        self.state.open.searching = false;
+        // The endpoint is a LIKE over every user; opening a conversation with
+        // oneself is never useful and the server would refuse the send.
+        if let Some(me) = self.state.user_uid() {
+            users.retain(|user| user.id != me);
+        }
+        match users.len() {
+            0 => {
+                self.state.status = Some(format!("找不到匹配“{query}”的用户"));
+                Vec::new()
+            }
+            // One unambiguous match opens straight away.
+            1 => self.open_peer(users.remove(0)),
+            // Several matches: never silently take the first. Put them on screen
+            // and let the user choose.
+            _ => {
+                self.state.open.choices = users;
+                self.state.open.selected = 0;
+                self.state.status = None;
+                Vec::new()
+            }
+        }
+    }
+
+    fn open_lookup_failed(&mut self, query: String, message: String) -> Vec<Effect> {
+        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        if !self.state.open.searching || query != self.state.open.query {
+            return Vec::new();
+        }
+        self.state.open.searching = false;
+        self.state.status = Some(format!("搜索用户失败：{message}"));
+        Vec::new()
+    }
+
+    /// Open the conversation with a user the list may not know. Sending the
+    /// first message is what makes the server record it; there is deliberately
+    /// no "seed the conversation" request here.
+    fn open_peer(&mut self, user: FoundUser) -> Vec<Effect> {
+        let peer = user.id;
+        self.state.open = OpenState::default();
+        self.state.input.clear();
+        self.state.status = None;
+        self.state.active = Some(ConversationId::User(peer));
+        self.state.messages.clear();
+        self.state.messages_loading = true;
+        self.state.message_scroll_up = 0;
+        self.state.open_peer_name = Some(user.name);
+        // If the peer happened to have a row already, move the highlight to it.
+        if let Some(index) = self
+            .state
+            .conversations
+            .iter()
+            .position(|row| row.id == ConversationId::User(peer))
+        {
+            self.state.selected = index;
+        }
+        vec![Effect::LoadMessages { peer }]
     }
 
     fn friend_request_sent(&mut self, target: String, outcome: SendOutcome) -> Vec<Effect> {
@@ -1485,6 +1683,38 @@ impl Machine {
         }
     }
 
+    /// Enter in the shared message box: a recognised `/open <name>` command
+    /// starts a conversation, everything else is an ordinary message.
+    ///
+    /// The box is not given a separate command line: `/`, `q`, and CJK text are
+    /// all message characters, so the command is only recognised here, on
+    /// submit, and only for the exact command word.
+    fn submit_input(&mut self) -> Vec<Effect> {
+        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        match parse_command(&self.state.input) {
+            Some(Command::Open(query)) => self.begin_open(query),
+            None => self.send_message(),
+        }
+    }
+
+    /// Start the fuzzy lookup. The query is remembered so a reply that lands
+    /// after a newer lookup can be recognised and dropped.
+    fn begin_open(&mut self, query: String) -> Vec<Effect> {
+        if query.is_empty() {
+            self.state.status = Some("用法：/open <名字>".to_string());
+            return Vec::new();
+        }
+        self.state.open.choices.clear();
+        self.state.open.selected = 0;
+        self.state.open.query = query.clone();
+        self.state.open.searching = true;
+        self.state.input.clear();
+        self.state.status = None;
+        vec![Effect::LookupOpen { query }]
+    }
+
     /// Take the message box's text and send it to the open direct conversation.
     ///
     /// The row is appended before the request leaves, so the flow never waits for
@@ -1544,6 +1774,17 @@ impl Machine {
         if self.state.active == Some(conversation) {
             self.state.status = None;
         }
+        // A conversation opened from `/open` has no list row until the server
+        // records the send. Ask for the authoritative list so it appears on its
+        // own instead of the client inventing a row and a preview.
+        if !self
+            .state
+            .conversations
+            .iter()
+            .any(|row| row.id == conversation)
+        {
+            self.schedule_refresh();
+        }
         Vec::new()
     }
 
@@ -1591,6 +1832,8 @@ impl Machine {
         self.state.messages_loading = false;
         self.state.message_scroll_up = 0;
         self.state.input.clear();
+        self.state.open = OpenState::default();
+        self.state.open_peer_name = None;
     }
 
     fn load_next_page(&mut self) -> Vec<Effect> {
@@ -1784,6 +2027,31 @@ impl Machine {
         self.state.status = Some(format!("补拉聊天记录失败：{message}"));
         Vec::new()
     }
+}
+
+/// A command typed into the shared message box.
+///
+/// Only exact command words are recognised, and only on submit: a message that
+/// happens to start with `/` is still a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Command {
+    /// `/open <name>`; the query may be empty, which the caller reports as a
+    /// usage hint rather than sending a lookup.
+    Open(String),
+}
+
+fn parse_command(input: &str) -> Option<Command> {
+    let text = input.trim();
+    let rest = text.strip_prefix("/open")?;
+    if rest.is_empty() {
+        return Some(Command::Open(String::new()));
+    }
+    // `/openfoo` is an ordinary message; the command word must be followed by
+    // whitespace before its argument.
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    Some(Command::Open(rest.trim().to_string()))
 }
 
 /// Keep a list selection inside its list after the data changes.

@@ -148,7 +148,11 @@ fn draw_conversations(frame: &mut Frame, area: Rect, state: &State) {
         }
     };
     draw_conversation_list(frame, list_area, state);
-    draw_message_pane(frame, messages_area, state);
+    if state.open.choosing() {
+        draw_open_picker(frame, messages_area, state);
+    } else {
+        draw_message_pane(frame, messages_area, state);
+    }
 }
 
 fn draw_conversations_header(frame: &mut Frame, area: Rect, state: &State) {
@@ -163,7 +167,7 @@ fn draw_conversations_header(frame: &mut Frame, area: Rect, state: &State) {
             Span::styled(who.to_string(), Style::default().fg(Color::DarkGray)),
             Span::raw("   "),
             Span::styled(
-                "↑/↓ 选择 · Enter 发送 · Ctrl-R 重新加载 · PgUp/PgDn 滚动消息 · Ctrl-F 好友 · Esc 退出",
+                "↑/↓ 选择 · Enter 发送 · /open 名字 开始会话 · Ctrl-R 重新加载 · PgUp/PgDn 滚动 · Ctrl-F 好友 · Esc 退出",
                 Style::default().fg(Color::DarkGray),
             ),
         ])),
@@ -224,16 +228,58 @@ fn draw_conversation_list(frame: &mut Frame, area: Rect, state: &State) {
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("");
     let mut list_state = ListState::default();
-    list_state.select(Some(state.selected.min(state.conversations.len() - 1)));
+    list_state.select(state.highlighted_index());
     frame.render_stateful_widget(list, list_area, &mut list_state);
+}
+
+/// Several `/open` matches: the user picks one. It takes the message pane's
+/// space, keeping the conversation list visible so cancelling returns exactly
+/// where the user was.
+fn draw_open_picker(frame: &mut Frame, area: Rect, state: &State) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(format!(" 选择用户 · /open {} ", state.open.query));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "↑/↓ 选择 · Enter 打开 · Esc 取消",
+            Style::default().fg(Color::DarkGray),
+        ))),
+        chunks[0],
+    );
+    if chunks[1].height == 0 || chunks[1].width == 0 || state.open.choices.is_empty() {
+        return;
+    }
+    let items: Vec<ListItem> = state
+        .open
+        .choices
+        .iter()
+        .map(|user| ListItem::new(format!("{}  #{}", user.name, user.id)))
+        .collect();
+    let len = items.len();
+    let list = List::new(items)
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("");
+    let mut list_state = ListState::default();
+    list_state.select(Some(state.open.selected.min(len - 1)));
+    frame.render_stateful_widget(list, chunks[1], &mut list_state);
 }
 
 fn draw_message_pane(frame: &mut Frame, area: Rect, state: &State) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let title = match state.active_conversation() {
-        Some(conversation) => format!(" {} ", conversation.title),
+    let title = match state.active_title() {
+        Some(title) => format!(" {title} "),
         None => " 消息 ".to_string(),
     };
     let block = Block::default().borders(Borders::ALL).title(title);
@@ -249,7 +295,9 @@ fn draw_message_pane(frame: &mut Frame, area: Rect, state: &State) {
         let hint = if state.messages_loading {
             "加载聊天记录中…"
         } else if state.active.is_some() {
-            "暂无消息"
+            // An empty conversation opened with /open is ready for its first
+            // message; say so instead of looking broken.
+            "暂无消息，输入第一条消息吧"
         } else {
             "从左侧选择一位好友"
         };

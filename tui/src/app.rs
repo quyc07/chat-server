@@ -201,6 +201,21 @@ async fn event_loop(
                         let _ = tx.send(event);
                     });
                 }
+                Effect::LookupOpen { query } => {
+                    let api = api.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let event = match api.find_users(&query).await {
+                            Ok(users) => Event::OpenUsersFound { query, users },
+                            Err(ApiError::Unauthorized(_)) => Event::TokenExpired,
+                            Err(error) => Event::OpenLookupFailed {
+                                query,
+                                message: error.message(),
+                            },
+                        };
+                        let _ = tx.send(event);
+                    });
+                }
                 Effect::SendFriendRequest { target } => {
                     let api = api.clone();
                     let tx = tx.clone();
