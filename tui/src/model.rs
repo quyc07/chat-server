@@ -76,6 +76,8 @@ pub enum WireError {
     FriendJson(String),
     #[error("invalid server timestamp {0:?}: {1}")]
     Time(String, String),
+    #[error("invalid message id in the send response: {0}")]
+    SendId(String),
 }
 
 /// The server's `ChatVo`, field-for-field. The `DateTime<Local>` fields on the
@@ -179,6 +181,7 @@ impl Message {
             mine: self.from_name == me,
             time_label: time_label(self.time, now),
             body: self.body.clone(),
+            failed: false,
         }
     }
 }
@@ -192,6 +195,8 @@ pub struct MessageView {
     pub mine: bool,
     pub time_label: String,
     pub body: String,
+    /// True for an optimistic row whose send failed. Rendering only colours it.
+    pub failed: bool,
 }
 
 /// The server's `UserHistoryMsg`, field-for-field.
@@ -222,6 +227,29 @@ pub fn messages_from_json(body: &[u8]) -> Result<Vec<Message>, WireError> {
             })
         })
         .collect()
+}
+
+/// Translate the `PUT /user/{uid}/send` body into the new message id.
+///
+/// The server's handler is `Res<String>`, and the id is quoted on the wire
+/// (`"42"`), not a JSON number. A bare numeric body is accepted as well: the same
+/// handler renders as plain text when axum's default `String` conversion applies,
+/// and both shapes carry one and the same id. This is the only place that knows.
+pub fn sent_mid_from_json(body: &[u8]) -> Result<i64, WireError> {
+    let raw = std::str::from_utf8(body)
+        .map_err(|e| WireError::SendId(e.to_string()))?
+        .trim();
+    if raw.is_empty() {
+        return Err(WireError::SendId("empty body".to_string()));
+    }
+    // `"42"` parses as a String; a bare `42` falls through to the text branch.
+    let id = match serde_json::from_str::<String>(raw) {
+        Ok(unquoted) => unquoted,
+        Err(_) => raw.to_string(),
+    };
+    id.trim()
+        .parse::<i64>()
+        .map_err(|e| WireError::SendId(format!("{id:?}: {e}")))
 }
 
 /// The server's login response. It sends more fields (`access_token_expires`);

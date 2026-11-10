@@ -554,7 +554,9 @@ fn stale_conversation_results_after_logout_are_ignored() {
 fn quitting_after_login_asks_for_a_server_logout_and_clears_the_token() {
     let mut machine = logged_in();
 
-    let effects = machine.handle(Event::Key(Key::Char('q')));
+    // `q` is message text now that the message box owns printable keys; Esc is
+    // the quit key on the conversations screen.
+    let effects = machine.handle(Event::Key(Key::Esc));
 
     assert_eq!(
         effects,
