@@ -1,6 +1,15 @@
+use crate::admin::AdminApi;
 use crate::app_state::AppState;
+use crate::auth::TokenApi;
 use crate::err::ServerError;
+use crate::event::EventApi;
+use crate::friend::FriendApi;
+use crate::group::GroupApi;
+use crate::open_api::swagger_ui;
+use crate::read_index::ReadIndexApi;
+use crate::user::UserApi;
 use axum::Router;
+use axum::routing::get;
 use serde::Deserialize;
 use validator::Validate;
 
@@ -24,13 +33,27 @@ pub trait Api {
     fn route(app_state: AppState) -> Router;
 }
 
+/// Build the full HTTP router for `app_state`.
+pub async fn router(app_state: AppState) -> Router {
+    Router::new()
+        .merge(swagger_ui().await)
+        .route("/", get(|| async { "Hello, World!" }))
+        .nest("/admin", AdminApi::route(app_state.clone()))
+        .nest("/user", UserApi::route(app_state.clone()))
+        .nest("/group", GroupApi::route(app_state.clone()))
+        .nest("/token", TokenApi::route(app_state.clone()))
+        .nest("/event", EventApi::route(app_state.clone()))
+        .nest("/friend", FriendApi::route(app_state.clone()))
+        .nest("/ri", ReadIndexApi::route(app_state))
+}
+
 type Res<T> = Result<T, ServerError>;
 
 #[derive(Deserialize, Validate)]
 pub(crate) struct PageReq {
     #[validate(range(min = 1, message = "page should be larger than 0"))]
     pub(crate) page: u64,
-    #[validate(range(min = 1, max = 10, message = "limit should be between 1 and 10"))]
+    #[validate(range(min = 1, max = 50, message = "limit should be between 1 and 50"))]
     pub(crate) limit: u64,
 }
 
