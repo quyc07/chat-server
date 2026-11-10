@@ -451,6 +451,23 @@ fn parse_request_status(raw: &str) -> FriendRequestStatus {
     }
 }
 
+/// The `PUT /ri` request body (`UpdateReadIndex` in `src/read_index.rs`).
+///
+/// It is externally tagged like the conversation list, but the variant fields
+/// are the *server's* ids: `{"User":{"target_uid":2,"mid":42}}` or
+/// `{"Group":{"target_gid":8,"mid":42}}`. Nothing outside this module names
+/// those fields.
+pub fn read_index_body(conversation: ConversationId, mid: i64) -> serde_json::Value {
+    match conversation {
+        ConversationId::User(target_uid) => {
+            serde_json::json!({"User": {"target_uid": target_uid, "mid": mid}})
+        }
+        ConversationId::Group(target_gid) => {
+            serde_json::json!({"Group": {"target_gid": target_gid, "mid": mid}})
+        }
+    }
+}
+
 /// The server never returns the caller's uid at login, but the JWT payload
 /// carries it as `id` (`src/auth.rs::Token`). The payload is the middle segment
 /// of the token and is base64url without padding; the signature is not verified

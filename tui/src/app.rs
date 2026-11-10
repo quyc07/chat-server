@@ -272,6 +272,24 @@ async fn event_loop(
                         let _ = tx.send(event);
                     });
                 }
+                Effect::ReportRead { conversation, mid } => {
+                    let api = api.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        // Best effort, always: the user is never blocked on a
+                        // read report, and a failure only reaches the status line.
+                        let event = match api.report_read(conversation, mid).await {
+                            Ok(()) => Event::ReadReported,
+                            Err(ApiError::Unauthorized(_)) => Event::TokenExpired,
+                            Err(error) => Event::ReadReportFailed {
+                                conversation,
+                                mid,
+                                message: error.message(),
+                            },
+                        };
+                        let _ = tx.send(event);
+                    });
+                }
                 Effect::Quit => return Ok(()),
             }
         }

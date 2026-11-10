@@ -111,9 +111,13 @@ fn a_message_for_the_open_conversation_appears_without_an_unread_bump() {
         "2026-11-11 12:00:00",
     )));
 
-    assert!(
-        effects.is_empty(),
-        "no extra request is needed to display it"
+    assert_eq!(
+        effects,
+        vec![Effect::ReportRead {
+            conversation: ConversationId::User(2),
+            mid: 50,
+        }],
+        "no request is needed to display it, but the open conversation stays read"
     );
     let state = machine.state();
     assert_eq!(state.messages.len(), 1);

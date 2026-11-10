@@ -11,8 +11,8 @@ use reqwest::{Client, StatusCode};
 use serde_json::json;
 
 use crate::model::{
-    self, Conversation, FoundUser, Friend, FriendDecision, FriendRequest, LoginWire, Message,
-    ReviewOutcome, SendOutcome,
+    self, Conversation, ConversationId, FoundUser, Friend, FriendDecision, FriendRequest,
+    LoginWire, Message, ReviewOutcome, SendOutcome,
 };
 
 /// How long a request may take before the UI reports the server unreachable.
@@ -212,6 +212,28 @@ impl ApiClient {
             .map_err(map_send_error)?;
         let body = read_body(response).await?;
         model::sent_mid_from_json(&body).map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// `PUT /ri` with `{"User":{"target_uid":..,"mid":..}}` or the group shape:
+    /// the read position the server derives unread counts from. Success carries
+    /// no body; any failure is best effort (the state machine only surfaces it).
+    pub async fn report_read(
+        &self,
+        conversation: ConversationId,
+        mid: i64,
+    ) -> Result<(), ApiError> {
+        let response = self
+            .authorized(
+                self.http
+                    .put(self.url("/ri"))
+                    .header(CONTENT_TYPE, "application/json")
+                    .json(&model::read_index_body(conversation, mid)),
+            )
+            .send()
+            .await
+            .map_err(map_send_error)?;
+        read_body(response).await?;
+        Ok(())
     }
 
     /// `GET /user/detail/{uid}`, the display name of one peer. Used when a
