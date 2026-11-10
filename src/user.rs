@@ -28,8 +28,8 @@ use crate::message::{
 };
 use crate::read_index::UpdateReadIndex;
 use crate::validate::ValidatedJson;
-use crate::{auth, datetime, friend, group, message, middleware, PageReq, Res};
-use crate::{read_index, Api};
+use crate::{Api, read_index};
+use crate::{PageReq, Res, auth, datetime, friend, group, message, middleware};
 use entity::prelude::User;
 use entity::sea_orm_active_enums::UserStatus;
 use entity::user;
