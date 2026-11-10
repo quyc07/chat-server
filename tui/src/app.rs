@@ -140,6 +140,35 @@ async fn event_loop(
                     let _ = time::timeout(LOGOUT_TIMEOUT, api.logout_with(&token)).await;
                     api.set_token(None);
                 }
+                Effect::SendMessage {
+                    peer,
+                    local_id,
+                    text,
+                } => {
+                    let api = api.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let conversation = crate::model::ConversationId::User(peer);
+                        let event = match api.send_message(peer, &text).await {
+                            Ok(mid) => Event::MessageSent {
+                                conversation,
+                                local_id,
+                                mid,
+                                // The wall clock is stamped at the edge, like the
+                                // `now` handed to rendering; the state machine stays
+                                // free of I/O.
+                                time: chrono::Local::now().naive_local(),
+                            },
+                            Err(ApiError::Unauthorized(_)) => Event::TokenExpired,
+                            Err(error) => Event::MessageSendFailed {
+                                conversation,
+                                local_id,
+                                message: error.message(),
+                            },
+                        };
+                        let _ = tx.send(event);
+                    });
+                }
                 Effect::FindUsers { query } => {
                     let api = api.clone();
                     let tx = tx.clone();

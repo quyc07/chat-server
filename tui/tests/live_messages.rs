@@ -480,3 +480,117 @@ fn stream_traffic_after_the_session_ended_is_ignored() {
     assert!(machine.state().conversations.is_empty());
     assert!(machine.state().messages.is_empty());
 }
+
+/// The wiring only knows the `local_id` echoed back by the send effect.
+fn local_id_of(effects: &[Effect]) -> u64 {
+    match effects.first() {
+        Some(Effect::SendMessage { local_id, .. }) => *local_id,
+        other => panic!("expected a send effect, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_echo_that_beats_the_send_response_replaces_the_optimistic_row() {
+    let mut machine = logged_in(1);
+    with_two_conversations(&mut machine);
+    machine.handle(Event::MessagesLoaded {
+        conversation: ConversationId::User(2),
+        items: vec![],
+    });
+    type_str(&mut machine, "你好");
+    machine.handle(Event::Key(Key::Enter));
+    assert_eq!(
+        machine
+            .state()
+            .message_views(at("2026-11-11 12:00:00"))
+            .len(),
+        1,
+        "the optimistic row is drawn before the server answers"
+    );
+
+    // The push echo wins the race: the pending row has no mid yet, so the echo
+    // consumes it by conversation and body instead of appending a second row.
+    machine.handle(Event::Chat(chat(
+        50,
+        1,
+        ConversationId::User(2),
+        "你好",
+        "2026-11-11 12:00:00",
+    )));
+
+    let views = machine.state().message_views(at("2026-11-11 12:00:00"));
+    assert_eq!(views.len(), 1, "one message, not two");
+    assert_eq!(views[0].body, "你好");
+    assert!(views[0].mine);
+    assert_eq!(machine.state().messages[0].mid, 50);
+
+    // The late send result has no row left to confirm; it must not resurrect it.
+    machine.handle(Event::MessageSent {
+        conversation: ConversationId::User(2),
+        local_id: 0,
+        mid: 50,
+        time: at("2026-11-11 12:00:00"),
+    });
+    assert_eq!(
+        machine
+            .state()
+            .message_views(at("2026-11-11 12:00:00"))
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn an_echo_of_an_already_confirmed_send_is_not_appended_again() {
+    let mut machine = logged_in(1);
+    with_two_conversations(&mut machine);
+    machine.handle(Event::MessagesLoaded {
+        conversation: ConversationId::User(2),
+        items: vec![],
+    });
+    type_str(&mut machine, "你好");
+    let effects = machine.handle(Event::Key(Key::Enter));
+    let local_id = local_id_of(&effects);
+
+    // The HTTP result wins the race: the optimistic row now carries the mid.
+    machine.handle(Event::MessageSent {
+        conversation: ConversationId::User(2),
+        local_id,
+        mid: 50,
+        time: at("2026-11-11 12:00:00"),
+    });
+    assert_eq!(
+        machine
+            .state()
+            .message_views(at("2026-11-11 12:00:00"))
+            .len(),
+        1
+    );
+
+    machine.handle(Event::Chat(chat(
+        50,
+        1,
+        ConversationId::User(2),
+        "你好",
+        "2026-11-11 12:00:00",
+    )));
+
+    assert_eq!(
+        machine
+            .state()
+            .message_views(at("2026-11-11 12:00:00"))
+            .len(),
+        1,
+        "the confirmed mid is already in the pane"
+    );
+    assert_eq!(
+        row(&machine, 2).mid,
+        50,
+        "the list summary still catches up with my own echo"
+    );
+    assert_eq!(
+        machine.handle(Event::Tick(REFRESH_DEBOUNCE)),
+        vec![Effect::RefreshConversations],
+        "and the authoritative list refresh is scheduled"
+    );
+}

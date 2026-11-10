@@ -118,10 +118,17 @@ fn draw_conversations(frame: &mut Frame, area: Rect, state: &State) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(area);
     let header = chunks[0];
     let body = chunks[1];
+    let input = chunks[2];
     draw_conversations_header(frame, header, state);
+    draw_conversations_message_input(frame, input, state);
     if body.height == 0 || body.width == 0 {
         return;
     }
@@ -155,12 +162,31 @@ fn draw_conversations_header(frame: &mut Frame, area: Rect, state: &State) {
             Span::styled(who.to_string(), Style::default().fg(Color::DarkGray)),
             Span::raw("   "),
             Span::styled(
-                "↑/↓ 选择 · Enter 重新加载 · PgUp/PgDn 滚动消息 · Ctrl-F 好友 · q 退出",
+                "↑/↓ 选择 · Enter 发送 · Ctrl-R 重新加载 · PgUp/PgDn 滚动消息 · Ctrl-F 好友 · Esc 退出",
                 Style::default().fg(Color::DarkGray),
             ),
         ])),
         area,
     );
+}
+
+fn draw_conversations_message_input(frame: &mut Frame, area: Rect, state: &State) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let cursor = Style::default().fg(Color::Cyan);
+    let mut spans = vec![
+        Span::styled("❯ ", cursor),
+        Span::styled(state.input.clone(), cursor),
+        Span::styled("▏", cursor),
+    ];
+    if state.input.is_empty() {
+        spans.push(Span::styled(
+            " 输入消息，Enter 发送",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_conversation_list(frame: &mut Frame, area: Rect, state: &State) {
@@ -216,7 +242,9 @@ fn draw_message_pane(frame: &mut Frame, area: Rect, state: &State) {
         return;
     }
 
-    if state.messages.is_empty() {
+    let now = Local::now().naive_local();
+    let views = state.message_views(now);
+    if views.is_empty() {
         let hint = if state.messages_loading {
             "加载聊天记录中…"
         } else if state.active.is_some() {
@@ -231,9 +259,8 @@ fn draw_message_pane(frame: &mut Frame, area: Rect, state: &State) {
         return;
     }
 
-    let now = Local::now().naive_local();
-    let mut lines = Vec::with_capacity(state.messages.len() * 3);
-    for view in state.message_views(now) {
+    let mut lines = Vec::with_capacity(views.len() * 3);
+    for view in views {
         lines.extend(message_lines(view));
     }
     // The paragraph wraps every line (CJK included) to the pane width. The state
@@ -268,9 +295,14 @@ fn message_lines(view: MessageView) -> Vec<Line<'static>> {
             Style::default(),
         )
     };
+    let label_style = if view.failed {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
     let mut lines = vec![Line::from(vec![
         Span::styled(format!("{who} "), who_style),
-        Span::styled(view.time_label, Style::default().fg(Color::DarkGray)),
+        Span::styled(view.time_label, label_style),
     ])];
     for row in view.body.split('\n') {
         lines.push(Line::from(Span::styled(format!("  {row}"), body_style)));
