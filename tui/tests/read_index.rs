@@ -503,3 +503,41 @@ fn a_conversation_opened_with_the_open_command_and_no_history_reports_nothing() 
     });
     assert!(effects.is_empty(), "an empty history still has no position");
 }
+
+/// A reconnect redraws the pane from history rather than from the stream. The
+/// messages that arrived during the outage are on screen, so they are read.
+#[test]
+fn messages_caught_up_after_a_reconnect_are_reported_as_read() {
+    let mut machine = logged_in(1);
+    with_two_conversations(&mut machine);
+    machine.handle(Event::MessagesLoaded {
+        conversation: ConversationId::User(2),
+        items: vec![message(21, 2, "bob", "早", "2026-11-11 11:00:00")],
+    });
+
+    let effects = machine.handle(Event::CatchUpLoaded {
+        conversation: ConversationId::User(2),
+        items: vec![
+            message(21, 2, "bob", "早", "2026-11-11 11:00:00"),
+            message(60, 2, "bob", "断线期间发的", "2026-11-11 12:00:00"),
+        ],
+    });
+
+    assert_eq!(
+        effects,
+        vec![Effect::ReportRead {
+            conversation: ConversationId::User(2),
+            mid: 60,
+        }],
+        "the missed message is in the pane, so it is read"
+    );
+
+    let effects = machine.handle(Event::CatchUpLoaded {
+        conversation: ConversationId::User(2),
+        items: vec![message(60, 2, "bob", "断线期间发的", "2026-11-11 12:00:00")],
+    });
+    assert!(
+        effects.is_empty(),
+        "a catch-up that adds nothing new does not re-report"
+    );
+}
