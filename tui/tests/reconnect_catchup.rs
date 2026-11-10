@@ -4,7 +4,7 @@
 //! state and effects come out. No terminal, no server, no sleeping — reconnect
 //! timing is the watchdog's job and is tested separately in `link_liveness.rs`.
 
-use chat_tui::model::{self, Conversation, ConversationId, Message, StreamChat, Unread};
+use chat_tui::model::{self, Conversation, ConversationId, Message, StreamMessage, Unread};
 use chat_tui::state::{CONNECTION_LOST_STATUS, Connection, Effect, Event, Key, Machine, Screen};
 use chrono::NaiveDateTime;
 
@@ -34,8 +34,14 @@ fn message(mid: i64, from_uid: i32, from_name: &str, body: &str, time: &str) -> 
     }
 }
 
-fn chat(mid: i64, from_uid: i32, target: ConversationId, body: &str, time: &str) -> StreamChat {
-    StreamChat {
+fn stream_message(
+    mid: i64,
+    from_uid: i32,
+    target: ConversationId,
+    body: &str,
+    time: &str,
+) -> StreamMessage {
+    StreamMessage {
         mid,
         from_uid,
         target,
@@ -179,7 +185,7 @@ fn catching_up_merges_by_message_id_and_keeps_each_message_exactly_once() {
 
     // The redialed stream is live while the history request is still in flight,
     // so the pane already holds message 12 when the snapshot lands.
-    machine.handle(Event::Chat(chat(
+    machine.handle(Event::MessageReceived(stream_message(
         12,
         2,
         ConversationId::User(1),
@@ -270,7 +276,11 @@ fn a_catch_up_that_includes_an_optimistic_send_leaves_it_once_as_confirmed_histo
         mid: 12,
         time: at("2026-11-11 12:00:00"),
     });
-    assert_eq!(machine.state().pending.len(), 1);
+    assert!(
+        machine.state().pending.is_empty(),
+        "the confirmed row is history now, not an optimistic row"
+    );
+    assert_eq!(mids(&machine), vec![10, 11, 12]);
 
     machine.handle(Event::LinkUp);
     machine.handle(Event::CatchUpLoaded {
@@ -285,6 +295,82 @@ fn a_catch_up_that_includes_an_optimistic_send_leaves_it_once_as_confirmed_histo
     assert!(
         machine.state().pending.is_empty(),
         "the confirmed optimistic row is now history and must not be drawn twice"
+    );
+    assert_eq!(mids(&machine), vec![10, 11, 12]);
+    assert_eq!(
+        machine
+            .state()
+            .message_views(at("2026-11-11 12:00:00"))
+            .iter()
+            .filter(|view| view.body == "我先说")
+            .count(),
+        1,
+        "the catch-up merge replaces the local copy by mid"
+    );
+}
+
+/// The other ordering: the catch-up snapshot beats the send's HTTP reply. The
+/// pending row has no mid to match on, so the snapshot must consume it by text
+/// (above the row's baseline), or the same message is drawn twice.
+#[test]
+fn a_catch_up_snapshot_that_beats_the_send_response_shows_the_message_once() {
+    let mut machine = with_open_conversation();
+
+    // Pane holds 10 and 11; the optimistic row is created with baseline 11.
+    type_str(&mut machine, "我先说");
+    assert_eq!(
+        machine.handle(Event::Key(Key::Enter)),
+        vec![Effect::SendMessage {
+            peer: 2,
+            local_id: 0,
+            text: "我先说".to_string(),
+        }]
+    );
+
+    // The snapshot (the server stored the message as mid 12) lands first.
+    machine.handle(Event::LinkDown);
+    machine.handle(Event::LinkUp);
+    machine.handle(Event::CatchUpLoaded {
+        conversation: ConversationId::User(2),
+        items: vec![
+            message(10, 2, "bob", "在吗", "2026-11-11 10:30:00"),
+            message(11, 2, "bob", "早", "2026-11-11 10:31:00"),
+            message(12, 1, "alice", "我先说", "2026-11-11 12:00:00"),
+        ],
+    });
+
+    assert!(
+        machine.state().pending.is_empty(),
+        "the snapshot already contains the sent message, so the optimistic row is gone"
+    );
+    assert_eq!(mids(&machine), vec![10, 11, 12]);
+    assert_eq!(
+        machine
+            .state()
+            .message_views(at("2026-11-11 12:00:00"))
+            .iter()
+            .filter(|view| view.body == "我先说")
+            .count(),
+        1,
+        "the same message must render exactly once"
+    );
+
+    // The late send reply has no row left to confirm; it must not resurrect one.
+    machine.handle(Event::MessageSent {
+        conversation: ConversationId::User(2),
+        local_id: 0,
+        mid: 12,
+        time: at("2026-11-11 12:00:00"),
+    });
+    assert_eq!(
+        machine
+            .state()
+            .message_views(at("2026-11-11 12:00:00"))
+            .iter()
+            .filter(|view| view.body == "我先说")
+            .count(),
+        1,
+        "a late reply is already reconciled"
     );
     assert_eq!(mids(&machine), vec![10, 11, 12]);
 }

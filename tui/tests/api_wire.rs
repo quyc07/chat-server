@@ -18,7 +18,7 @@ use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// A real `Vec<ChatVo>` body: one direct chat that was never read (`"all"`), one
+/// A real `Vec<ChatVo>` body: one direct conversation never read (`"all"`), one
 /// with three unread, and one group row (`unread: null`).
 const HISTORY_JSON: &str = r#"[
   {"User":{"uid":2,"user_name":"alice","mid":42,"msg":"第一行\n第二行","msg_time":"2026-11-10 23:59:00","unread":"all"}},
@@ -68,9 +68,9 @@ async fn login_failure_exposes_the_server_text_without_outer_json_quotes() {
         .and(path("/token/login"))
         .respond_with(
             ResponseTemplate::new(401)
-                // `(StatusCode::UNAUTHORIZED, err.to_string())` is serialized by
-                // `Json(String)`, so the body is a quoted JSON string.
-                .set_body_raw(r#""用户名或密码错误""#, "application/json"),
+                // `ServerError::AuthErr` renders as `(StatusCode, err.to_string())`,
+                // which axum sends as plain text, not a quoted JSON string.
+                .set_body_raw("用户名或密码错误", "text/plain; charset=utf-8"),
         )
         .mount(&server)
         .await;

@@ -239,22 +239,23 @@ pub fn messages_from_json(body: &[u8]) -> Result<Vec<Message>, WireError> {
 
 /// Translate the `PUT /user/{uid}/send` body into the new message id.
 ///
-/// The server's handler is `Res<String>`, and the id is quoted on the wire
-/// (`"42"`), not a JSON number. A bare numeric body is accepted as well: the same
-/// handler renders as plain text when axum's default `String` conversion applies,
-/// and both shapes carry one and the same id. This is the only place that knows.
-pub fn sent_mid_from_json(body: &[u8]) -> Result<i64, WireError> {
+/// The server's handler is `Res<String>` (`src/user.rs::send`), and axum renders
+/// a `String` response as a plain text body: the bytes are `42`, **not** JSON
+/// `"42"`. A quoted JSON string is tolerated as a defensive extra because it
+/// carries the same id, but this server never produces it; a proxy or a future
+/// `Json<String>` handler should not be able to turn a valid id into a decode
+/// failure. This is the only place that knows.
+pub fn sent_mid_from_body(body: &[u8]) -> Result<i64, WireError> {
     let raw = std::str::from_utf8(body)
         .map_err(|e| WireError::SendId(e.to_string()))?
         .trim();
     if raw.is_empty() {
         return Err(WireError::SendId("empty body".to_string()));
     }
-    // `"42"` parses as a String; a bare `42` falls through to the text branch.
-    let id = match serde_json::from_str::<String>(raw) {
-        Ok(unquoted) => unquoted,
-        Err(_) => raw.to_string(),
-    };
+    let id = raw
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(raw);
     id.trim()
         .parse::<i64>()
         .map_err(|e| WireError::SendId(format!("{id:?}: {e}")))
@@ -395,30 +396,32 @@ struct WireFriendRequest {
     status: String,
 }
 
-/// Translate the `GET /user/find/{name}` body into id/name pairs.
-pub fn found_users_from_json(body: &[u8]) -> Result<Vec<FoundUser>, WireError> {
+/// Decode a `[{id, name}]` body into one domain row per element. Both
+/// `GET /user/find/{name}` and `GET /friend` send this same wire shape; only the
+/// domain target differs.
+fn id_name_rows<T>(
+    body: &[u8],
+    into_domain: impl Fn(WireIdName) -> T,
+) -> Result<Vec<T>, WireError> {
     let rows: Vec<WireIdName> =
         serde_json::from_slice(body).map_err(|e| WireError::FriendJson(e.to_string()))?;
-    Ok(rows
-        .into_iter()
-        .map(|row| FoundUser {
-            id: row.id,
-            name: row.name,
-        })
-        .collect())
+    Ok(rows.into_iter().map(into_domain).collect())
+}
+
+/// Translate the `GET /user/find/{name}` body into id/name pairs.
+pub fn found_users_from_json(body: &[u8]) -> Result<Vec<FoundUser>, WireError> {
+    id_name_rows(body, |row| FoundUser {
+        id: row.id,
+        name: row.name,
+    })
 }
 
 /// Translate the `GET /friend` body into domain friends.
 pub fn friends_from_json(body: &[u8]) -> Result<Vec<Friend>, WireError> {
-    let rows: Vec<WireIdName> =
-        serde_json::from_slice(body).map_err(|e| WireError::FriendJson(e.to_string()))?;
-    Ok(rows
-        .into_iter()
-        .map(|row| Friend {
-            id: row.id,
-            name: row.name,
-        })
-        .collect())
+    id_name_rows(body, |row| Friend {
+        id: row.id,
+        name: row.name,
+    })
 }
 
 /// Translate the `GET /friend/req` body. The server sends every inbound request,
@@ -451,13 +454,22 @@ fn parse_request_status(raw: &str) -> FriendRequestStatus {
     }
 }
 
+/// How far one conversation has been read: the pair the read-index API always
+/// needs together. Carried as one value so the two ids cannot drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ReadPosition {
+    pub conversation: ConversationId,
+    pub mid: i64,
+}
+
 /// The `PUT /ri` request body (`UpdateReadIndex` in `src/read_index.rs`).
 ///
 /// It is externally tagged like the conversation list, but the variant fields
 /// are the *server's* ids: `{"User":{"target_uid":2,"mid":42}}` or
 /// `{"Group":{"target_gid":8,"mid":42}}`. Nothing outside this module names
 /// those fields.
-pub fn read_index_body(conversation: ConversationId, mid: i64) -> serde_json::Value {
+pub fn read_index_body(position: ReadPosition) -> serde_json::Value {
+    let ReadPosition { conversation, mid } = position;
     match conversation {
         ConversationId::User(target_uid) => {
             serde_json::json!({"User": {"target_uid": target_uid, "mid": mid}})
@@ -493,7 +505,7 @@ pub fn uid_from_token(token: &str) -> Result<i32, WireError> {
     Ok(claims.id)
 }
 
-/// A chat message as it arrives on the event stream.
+/// A message as it arrives on the event stream.
 ///
 /// The push shape is not the history shape: the stream nests the text three
 /// levels deep (`payload.detail.Normal.content.content`) and carries the target
@@ -501,7 +513,7 @@ pub fn uid_from_token(token: &str) -> Result<i32, WireError> {
 /// `from_uid`, so the state machine attaches the name from the conversation row
 /// (or asks `/user/detail/{uid}` for a peer it has never seen).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StreamChat {
+pub struct StreamMessage {
     pub mid: i64,
     pub from_uid: i32,
     /// The user or group the sender addressed.
@@ -511,7 +523,7 @@ pub struct StreamChat {
     pub time: NaiveDateTime,
 }
 
-impl StreamChat {
+impl StreamMessage {
     /// True when this is the echo of a message this client sent.
     pub fn is_mine(&self, me: Option<i32>) -> bool {
         me.is_some_and(|uid| uid == self.from_uid)
@@ -543,7 +555,7 @@ impl StreamChat {
 /// What one named event from the stream means to this client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamEvent {
-    Chat(StreamChat),
+    MessageReceived(StreamMessage),
     /// Liveness only. Never a message.
     Heartbeat,
 }
@@ -589,22 +601,45 @@ struct WireMessageContent {
     content: String,
 }
 
+/// The server's `event::Message` enum (`src/event.rs`), field-for-field. It is
+/// externally tagged and `event_handler` serialises the whole enum through
+/// `json_data`, so an SSE `data:` line is **not** the inner struct: it is
+/// `{"ChatMessage": {...}}` or `{"Heartbeat": {...}}`. This type keeps that
+/// envelope honest; the repo's own `assets/index.html` reads
+/// `data.ChatMessage.payload` for the same reason.
+#[derive(Debug, Deserialize)]
+enum WireStreamFrame {
+    ChatMessage(WireChatMessage),
+    #[allow(dead_code)] // the heartbeat payload is liveness only
+    Heartbeat(WireHeartbeat),
+}
+
+/// The server's `HeartbeatMessage` (`src/event.rs`). Only liveness matters here,
+/// so the timestamp is accepted but unused.
+#[derive(Debug, Deserialize)]
+struct WireHeartbeat {
+    #[allow(dead_code)] // present on the wire; liveness only
+    #[serde(default)]
+    time: String,
+}
+
 /// Translate one dispatched stream frame. Unknown event names return `Ok(None)`
 /// so a server-side addition is ignored instead of treated as a failure.
 pub fn stream_event(event: &str, data: &str) -> Result<Option<StreamEvent>, WireError> {
     match event {
-        "Chat" => {
-            let wire: WireChatMessage =
-                serde_json::from_str(data).map_err(|e| WireError::Stream(format!("Chat: {e}")))?;
-            Ok(Some(StreamEvent::Chat(wire.into_domain()?)))
-        }
-        "Heartbeat" => Ok(Some(StreamEvent::Heartbeat)),
-        _ => Ok(None),
+        "Chat" | "Heartbeat" => {}
+        _ => return Ok(None),
     }
+    let frame: WireStreamFrame = serde_json::from_str(data)
+        .map_err(|e| WireError::Stream(format!("{event} envelope: {e}")))?;
+    Ok(Some(match frame {
+        WireStreamFrame::ChatMessage(wire) => StreamEvent::MessageReceived(wire.into_domain()?),
+        WireStreamFrame::Heartbeat(_) => StreamEvent::Heartbeat,
+    }))
 }
 
 impl WireChatMessage {
-    fn into_domain(self) -> Result<StreamChat, WireError> {
+    fn into_domain(self) -> Result<StreamMessage, WireError> {
         let WireChatPayload {
             from_uid,
             created_at,
@@ -619,7 +654,7 @@ impl WireChatMessage {
             WireMessageTarget::User { uid } => ConversationId::User(uid),
             WireMessageTarget::Group { gid } => ConversationId::Group(gid),
         };
-        Ok(StreamChat {
+        Ok(StreamMessage {
             mid: self.mid,
             from_uid,
             target,

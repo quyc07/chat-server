@@ -1,8 +1,8 @@
 //! Event-stream parsing without a server.
 //!
-//! The fixture below is the exact byte shape the server writes: axum's SSE
-//! encoder emits `event: <name>` plus `data: <json>` followed by a blank line,
-//! and `KeepAlive::text("keep-alive-text")` emits the comment line
+//! The fixtures are the exact byte shape the server writes: axum's SSE encoder
+//! emits `event: <name>` plus `data: <json>` followed by a blank line, and
+//! `KeepAlive::text("keep-alive-text")` emits the comment line
 //! `: keep-alive-text`. Comments carry no event and must never surface.
 //!
 //! Two layers are covered here: the transport parser (`chat_tui::sse`) and the
@@ -16,14 +16,37 @@ use chrono::NaiveDateTime;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-/// `ChatMessage` from `src/message.rs`: `mid` at the top, then
-/// `payload.from_uid`, `payload.created_at`, an externally tagged target, and
-/// the text nested three levels down under `detail.Normal`.
-const CHAT_DATA: &str = r#"{"mid":42,"payload":{"from_uid":2,"created_at":"2026-11-11 09:00:00","target":{"User":{"uid":1}},"detail":{"Normal":{"content":{"content":"早上好"}}}}}"#;
+/// The `data:` line for an incoming message, byte-for-byte as the server writes
+/// it. `src/event.rs::event_handler` serialises its `Message::ChatMessage(..)`
+/// through `json_data`, and that enum is externally tagged, so the message is
+/// wrapped in `{"ChatMessage": ...}`; the repo's own `assets/index.html` reads
+/// `data.ChatMessage.payload` for the same reason. Inside the wrapper the shape
+/// is the server's `message::ChatMessage` (`mid` + `payload`), with
+/// `payload.target` and `payload.detail` externally tagged and the text nested
+/// under `detail.Normal.content.content`.
+///
+/// This is a hand-copied-but-verified fixture (it also matches a capture from
+/// the running server). Generating it from `chat_server::event::Message` would
+/// need a dev-dependency on the server crate, which would drag that whole crate
+/// into `cargo clippy -p chat-tui --all-targets -- -D warnings` and turn its
+/// pre-existing warnings into failures. The regression test below still fails
+/// for the unwrapped `{mid, payload}` shape this replaced.
+const CHAT_DATA: &str = r#"{"ChatMessage":{"mid":42,"payload":{"from_uid":2,"created_at":"2026-11-11 09:00:00","target":{"User":{"uid":1}},"detail":{"Normal":{"content":{"content":"早上好"}}}}}}"#;
 
-const ECHO_DATA: &str = r#"{"mid":43,"payload":{"from_uid":1,"created_at":"2026-11-11 09:01:00","target":{"User":{"uid":2}},"detail":{"Normal":{"content":{"content":"早"}}}}}"#;
+/// My own echo, in the same envelope.
+const ECHO_DATA: &str = r#"{"ChatMessage":{"mid":43,"payload":{"from_uid":1,"created_at":"2026-11-11 09:01:00","target":{"User":{"uid":2}},"detail":{"Normal":{"content":{"content":"早"}}}}}}"#;
 
-const GROUP_DATA: &str = r#"{"mid":44,"payload":{"from_uid":3,"created_at":"2026-11-11 09:02:00","target":{"Group":{"gid":7}},"detail":{"Normal":{"content":{"content":"大家好"}}}}}"#;
+/// A group-targeted message, in the same envelope.
+const GROUP_DATA: &str = r#"{"ChatMessage":{"mid":44,"payload":{"from_uid":3,"created_at":"2026-11-11 09:02:00","target":{"Group":{"gid":7}},"detail":{"Normal":{"content":{"content":"大家好"}}}}}}"#;
+
+/// Exact `data:` bytes captured from the running server for one real message
+/// (bob -> alice, `mid` 1): the regression test below feeds these unmodified.
+const CAPTURED_CHAT_DATA: &str = r#"{"ChatMessage":{"mid":1,"payload":{"from_uid":2,"created_at":"2026-11-11 01:28:19","target":{"User":{"uid":1}},"detail":{"Normal":{"content":{"content":"hello from bob"}}}}}}"#;
+
+/// The server's `Message::Heartbeat(HeartbeatMessage { time })` is wrapped the
+/// same way (`src/event.rs`). The client treats a heartbeat as liveness only and
+/// never reads `time`, so only the envelope tag matters here.
+const HEARTBEAT_DATA: &str = r#"{"Heartbeat":{"time":"2026-11-11 09:00:05"}}"#;
 
 fn at(text: &str) -> NaiveDateTime {
     NaiveDateTime::parse_from_str(text, model::WIRE_TIME_FORMAT).expect("test timestamp")
@@ -37,12 +60,12 @@ fn token_for(uid: i32) -> String {
     format!("{header}.{payload}.c2lnbmF0dXJl")
 }
 
-/// A real server stream: a keep-alive, a chat, a heartbeat, another keep-alive.
+/// A real server stream: a keep-alive, a message, a heartbeat, another keep-alive.
 fn stream_bytes() -> Vec<u8> {
     format!(
         ": keep-alive-text\n\n\
          event: Chat\ndata: {CHAT_DATA}\n\n\
-         event: Heartbeat\ndata: {{\"time\":\"2026-11-11 09:00:05\"}}\n\n\
+         event: Heartbeat\ndata: {HEARTBEAT_DATA}\n\n\
          : keep-alive-text\n\n"
     )
     .into_bytes()
@@ -63,7 +86,7 @@ fn the_parser_frames_named_events_and_never_turns_keep_alive_comments_into_event
             },
             Frame {
                 event: "Heartbeat".to_string(),
-                data: r#"{"time":"2026-11-11 09:00:05"}"#.to_string(),
+                data: HEARTBEAT_DATA.to_string(),
             },
         ],
         "the two keep-alive comments produce no frames at all"
@@ -102,27 +125,36 @@ fn a_line_that_keeps_growing_without_a_newline_does_not_grow_without_bound() {
     assert!(framed, "the parser reports the oversized line");
 }
 
+/// The regression this whole envelope handling exists for: the server's data is
+/// `{"ChatMessage": {mid, payload}}`, and a client that parses the bare
+/// `{mid, payload}` drops every live message. The input is the capture above.
 #[test]
-fn a_chat_frame_decodes_the_three_level_payload_into_one_stream_chat() {
-    let event = model::stream_event("Chat", CHAT_DATA)
-        .expect("a real Chat payload decodes")
+fn a_captured_chat_frame_decodes_through_its_enum_envelope() {
+    let data = CAPTURED_CHAT_DATA;
+    assert!(
+        data.starts_with(r#"{"ChatMessage":{"mid":1"#),
+        "the server wraps the message in its externally tagged enum: {data}"
+    );
+
+    let event = model::stream_event("Chat", data)
+        .expect("the captured Chat frame decodes")
         .expect("Chat is a known event");
 
-    let StreamEvent::Chat(chat) = event else {
-        panic!("a Chat event must decode to a chat");
+    let StreamEvent::MessageReceived(message) = event else {
+        panic!("a Chat event must decode to a message");
     };
-    assert_eq!(chat.mid, 42);
-    assert_eq!(chat.from_uid, 2);
-    assert_eq!(chat.target, ConversationId::User(1));
-    assert_eq!(chat.body, "早上好");
-    assert_eq!(chat.time, at("2026-11-11 09:00:00"));
+    assert_eq!(message.mid, 1);
+    assert_eq!(message.from_uid, 2);
+    assert_eq!(message.target, ConversationId::User(1));
+    assert_eq!(message.body, "hello from bob");
+    assert_eq!(message.time, at("2026-11-11 01:28:19"));
 }
 
 #[test]
 fn an_incoming_message_belongs_to_the_sender_but_my_echo_belongs_to_the_recipient() {
     let incoming = match model::stream_event("Chat", CHAT_DATA).expect("decodes") {
-        Some(StreamEvent::Chat(chat)) => chat,
-        _ => panic!("expected a chat"),
+        Some(StreamEvent::MessageReceived(message)) => message,
+        _ => panic!("expected a message"),
     };
     assert_eq!(
         incoming.conversation(Some(1)),
@@ -132,8 +164,8 @@ fn an_incoming_message_belongs_to_the_sender_but_my_echo_belongs_to_the_recipien
     assert!(!incoming.is_mine(Some(1)));
 
     let echo = match model::stream_event("Chat", ECHO_DATA).expect("decodes") {
-        Some(StreamEvent::Chat(chat)) => chat,
-        _ => panic!("expected a chat"),
+        Some(StreamEvent::MessageReceived(message)) => message,
+        _ => panic!("expected a message"),
     };
     assert_eq!(
         echo.conversation(Some(1)),
@@ -145,19 +177,19 @@ fn an_incoming_message_belongs_to_the_sender_but_my_echo_belongs_to_the_recipien
 
 #[test]
 fn a_group_message_belongs_to_the_group_even_when_someone_else_sent_it() {
-    let chat = match model::stream_event("Chat", GROUP_DATA).expect("decodes") {
-        Some(StreamEvent::Chat(chat)) => chat,
-        _ => panic!("expected a chat"),
+    let message = match model::stream_event("Chat", GROUP_DATA).expect("decodes") {
+        Some(StreamEvent::MessageReceived(message)) => message,
+        _ => panic!("expected a message"),
     };
 
-    assert_eq!(chat.target, ConversationId::Group(7));
-    assert_eq!(chat.conversation(Some(1)), ConversationId::Group(7));
+    assert_eq!(message.target, ConversationId::Group(7));
+    assert_eq!(message.conversation(Some(1)), ConversationId::Group(7));
 }
 
 #[test]
 fn a_heartbeat_is_liveness_only_and_an_unknown_event_is_ignored() {
     assert_eq!(
-        model::stream_event("Heartbeat", r#"{"time":"2026-11-11 09:00:05"}"#).expect("known"),
+        model::stream_event("Heartbeat", HEARTBEAT_DATA).expect("known"),
         Some(StreamEvent::Heartbeat)
     );
     assert_eq!(

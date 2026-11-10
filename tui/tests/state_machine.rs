@@ -27,6 +27,19 @@ fn conversation(uid: i32, name: &str, mid: i64, time: &str, unread: Unread) -> C
     }
 }
 
+/// A JWT-shaped token whose payload is `{"id": uid}`: login now refuses a token
+/// it cannot attribute to a user.
+fn token_for(uid: i32) -> String {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    let header = URL_SAFE_NO_PAD.encode(r#"{{"alg":"HS256","typ":"JWT"}}"#);
+    let payload = URL_SAFE_NO_PAD.encode(format!(
+        r#"{{"id":{uid},"name":"alice","email":null,"phone":null,"exp":9999999999}}"#
+    ));
+    format!("{header}.{payload}.c2lnbmF0dXJl")
+}
+
 fn type_str(machine: &mut Machine, text: &str) {
     for c in text.chars() {
         machine.handle(Event::Key(Key::Char(c)));
@@ -50,7 +63,7 @@ fn logged_in() -> Machine {
         }]
     );
     let effects = machine.handle(Event::LoginSucceeded {
-        token: "tok-1".to_string(),
+        token: token_for(1),
     });
     assert_eq!(effects, vec![Effect::LoadHistory { page: 1 }]);
     machine
@@ -167,12 +180,12 @@ fn login_success_opens_the_list_and_requests_the_first_page() {
     machine.handle(Event::Key(Key::Enter));
 
     let effects = machine.handle(Event::LoginSucceeded {
-        token: "tok-1".to_string(),
+        token: token_for(1),
     });
 
     assert_eq!(effects, vec![Effect::LoadHistory { page: 1 }]);
     assert_eq!(machine.state().screen, Screen::Conversations);
-    assert_eq!(machine.state().token(), Some("tok-1"));
+    assert_eq!(machine.state().token(), Some(token_for(1).as_str()));
     assert_eq!(machine.state().user_name(), Some("alice"));
     assert!(machine.state().loading);
     assert!(machine.state().status.is_none());
@@ -210,10 +223,10 @@ fn register_mode_is_a_toggle_and_register_success_logs_in_with_same_credentials(
     );
 
     machine.handle(Event::LoginSucceeded {
-        token: "tok-new".to_string(),
+        token: token_for(2),
     });
     assert_eq!(machine.state().screen, Screen::Conversations);
-    assert_eq!(machine.state().token(), Some("tok-new"));
+    assert_eq!(machine.state().token(), Some(token_for(2).as_str()));
 }
 
 #[test]
@@ -469,9 +482,9 @@ fn the_token_is_replaced_proactively_at_fifty_minutes() {
     );
 
     machine.handle(Event::ReloginSucceeded {
-        token: "tok-2".to_string(),
+        token: token_for(2),
     });
-    assert_eq!(machine.state().token(), Some("tok-2"));
+    assert_eq!(machine.state().token(), Some(token_for(2).as_str()));
     assert!(machine.state().status.is_none());
 
     assert!(
@@ -562,7 +575,7 @@ fn quitting_after_login_asks_for_a_server_logout_and_clears_the_token() {
         effects,
         vec![
             Effect::Logout {
-                token: "tok-1".to_string()
+                token: token_for(1)
             },
             Effect::Quit
         ]
@@ -592,7 +605,7 @@ fn resizing_degrades_the_layout_without_losing_state() {
     assert_eq!(machine.state().layout_mode(), LayoutMode::Minimal);
     assert_eq!(machine.state().screen, Screen::Conversations);
     assert_eq!(machine.state().conversations.len(), 1);
-    assert_eq!(machine.state().token(), Some("tok-1"));
+    assert_eq!(machine.state().token(), Some(token_for(1).as_str()));
 
     machine.handle(Event::Resize {
         width: 60,
@@ -612,4 +625,63 @@ fn resizing_degrades_the_layout_without_losing_state() {
     });
     assert_eq!(machine.state().layout_mode(), LayoutMode::Minimal);
     assert!(!machine.state().quit);
+}
+
+#[test]
+fn a_token_without_a_uid_fails_the_login_instead_of_inverting_authorship() {
+    let mut machine = Machine::new();
+    fill_credentials(&mut machine, "alice", "s3cret");
+    machine.handle(Event::Key(Key::Enter));
+
+    let effects = machine.handle(Event::LoginSucceeded {
+        token: "not-a-jwt".to_string(),
+    });
+
+    assert!(
+        effects.is_empty(),
+        "no list request may go out for a session we cannot attribute"
+    );
+    let state = machine.state();
+    assert_eq!(state.screen, Screen::Login, "the user stays on login");
+    assert!(!state.is_logged_in(), "no session is created");
+    assert_eq!(state.user_uid(), None);
+    assert!(!state.form.busy, "the form can be retried");
+    assert!(
+        state
+            .status
+            .as_deref()
+            .is_some_and(|status| status.contains("登录令牌")),
+        "the status line says why the login was refused: {:?}",
+        state.status
+    );
+}
+
+#[test]
+fn a_relogin_token_without_a_uid_ends_the_session_instead_of_guessing() {
+    let mut machine = logged_in();
+    assert_eq!(
+        machine.handle(Event::Tick(RELOGIN_AFTER)),
+        vec![Effect::Relogin {
+            name: "alice".to_string(),
+            password: "s3cret".to_string(),
+        }]
+    );
+
+    machine.handle(Event::ReloginSucceeded {
+        token: "header.eyJpZCI6.bad".to_string(),
+    });
+
+    let state = machine.state();
+    assert_eq!(state.screen, Screen::Login);
+    assert!(state.token().is_none(), "the unreadable token is dropped");
+    assert!(!state.is_logged_in());
+    assert!(
+        state
+            .status
+            .as_deref()
+            .is_some_and(|status| status.contains("自动续登失败")),
+        "the status line reports the failed renewal: {:?}",
+        state.status
+    );
+    assert!(state.form.password.is_empty(), "the password is re-entered");
 }

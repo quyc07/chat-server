@@ -1,7 +1,8 @@
 //! Wire tests for `PUT /user/{peer}/send`.
 //!
-//! The response body is the server's `Res<String>`: the new message id quoted as
-//! a JSON string (`"42"`), not a JSON number. The 404 is the server's
+//! The response body is the server's `Res<String>` (`src/user.rs::send`), and
+//! axum renders a `String` response as plain text: the new message id arrives as
+//! `42`, never as JSON `"42"` or as a JSON number. The 404 is the server's
 //! `FriendErr::NotFriend` text, and a 401 is the same read-body classification as
 //! every other authenticated call.
 
@@ -11,14 +12,15 @@ use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
-async fn send_puts_the_message_and_decodes_the_quoted_json_id() {
+async fn send_puts_the_message_and_decodes_the_bare_text_id() {
     let server = MockServer::start().await;
     Mock::given(method("PUT"))
         .and(path("/user/2/send"))
         .and(header("authorization", "Bearer tok-1"))
         .and(header("content-type", "application/json"))
         .and(body_json(json!({ "msg": "你好，世界" })))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(r#""42""#, "application/json"))
+        // `Res<String>` rendered by axum: the id is plain text, not JSON.
+        .respond_with(ResponseTemplate::new(200).set_body_raw("42", "text/plain; charset=utf-8"))
         .expect(1)
         .mount(&server)
         .await;
@@ -31,18 +33,20 @@ async fn send_puts_the_message_and_decodes_the_quoted_json_id() {
         .await
         .expect("send succeeds");
 
-    assert_eq!(mid, 42, "the quoted string holds the numeric id");
+    assert_eq!(mid, 42, "the bare text body holds the numeric id");
     server.verify().await;
 }
 
 #[tokio::test]
-async fn a_plain_numeric_body_also_decodes_to_the_same_id() {
+async fn a_quoted_json_id_is_tolerated_even_though_this_server_never_sends_it() {
     let server = MockServer::start().await;
-    // Axum renders a bare `String` handler result as text; the id still travels
-    // in the body, so the client accepts both shapes.
+    // Defensive tolerance only: `Res<String>` is plain text on this server, so a
+    // quoted body is not a fixture of real server output. It is accepted because
+    // it carries the same id and a proxy should not turn a valid send into a
+    // decode failure.
     Mock::given(method("PUT"))
         .and(path("/user/2/send"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw("43", "text/plain"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(r#""43""#, "application/json"))
         .expect(1)
         .mount(&server)
         .await;
@@ -84,7 +88,9 @@ async fn a_401_on_send_is_classified_so_the_wiring_can_reauthenticate() {
     Mock::given(method("PUT"))
         .and(path("/user/2/send"))
         .respond_with(
-            ResponseTemplate::new(401).set_body_raw(r#""无效的Token""#, "application/json"),
+            // `ServerError::AuthErr(InvalidToken)` renders as `(StatusCode, String)`,
+            // which axum sends as plain text.
+            ResponseTemplate::new(401).set_body_raw("无效的Token", "text/plain; charset=utf-8"),
         )
         .expect(1)
         .mount(&server)

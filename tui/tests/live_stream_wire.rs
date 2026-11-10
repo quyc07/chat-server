@@ -11,14 +11,17 @@ use chat_tui::sse::{Frame, Parser};
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// `ChatMessage` from `src/message.rs`, wrapped in the server's SSE framing.
-const CHAT_DATA: &str = r#"{"mid":42,"payload":{"from_uid":2,"created_at":"2026-11-11 09:00:00","target":{"User":{"uid":1}},"detail":{"Normal":{"content":{"content":"早上好"}}}}}"#;
+/// The exact `data:` shape the server writes. `src/event.rs::event_handler`
+/// serialises its externally tagged `Message` enum through `json_data`, so the
+/// frame is `{"ChatMessage": {mid, payload}}`; the envelope is not optional.
+/// The canonical, server-type-derived fixture lives in `sse_parsing.rs`.
+const CHAT_DATA: &str = r#"{"ChatMessage":{"mid":42,"payload":{"from_uid":2,"created_at":"2026-11-11 09:00:00","target":{"User":{"uid":1}},"detail":{"Normal":{"content":{"content":"早上好"}}}}}}"#;
 
 fn stream_body() -> String {
     format!(
         ": keep-alive-text\n\n\
          event: Chat\ndata: {CHAT_DATA}\n\n\
-         event: Heartbeat\ndata: {{\"time\":\"2026-11-11 09:00:05\"}}\n\n\
+         event: Heartbeat\ndata: {{\"Heartbeat\":{{\"time\":\"2026-11-11 09:00:05\"}}}}\n\n\
          : keep-alive-text\n\n"
     )
 }
@@ -57,14 +60,14 @@ async fn the_stream_is_opened_with_the_token_in_the_query_string_and_parses_live
     );
     assert_eq!(frames[0].data, CHAT_DATA);
 
-    let chat = match model::stream_event(&frames[0].event, &frames[0].data).expect("decodes") {
-        Some(StreamEvent::Chat(chat)) => chat,
+    let message = match model::stream_event(&frames[0].event, &frames[0].data).expect("decodes") {
+        Some(StreamEvent::MessageReceived(message)) => message,
         _ => panic!("the Chat frame must decode"),
     };
-    assert_eq!(chat.mid, 42);
-    assert_eq!(chat.from_uid, 2);
-    assert_eq!(chat.conversation(Some(1)), ConversationId::User(2));
-    assert_eq!(chat.body, "早上好");
+    assert_eq!(message.mid, 42);
+    assert_eq!(message.from_uid, 2);
+    assert_eq!(message.conversation(Some(1)), ConversationId::User(2));
+    assert_eq!(message.body, "早上好");
 
     assert_eq!(
         model::stream_event(&frames[1].event, &frames[1].data).expect("decodes"),

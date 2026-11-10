@@ -10,7 +10,7 @@
 //! `Result<(), ServerError>`, and `()` renders as `200` with an empty body.
 
 use chat_tui::api::{ApiClient, ApiError};
-use chat_tui::model::ConversationId;
+use chat_tui::model::{ConversationId, ReadPosition};
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -32,9 +32,12 @@ async fn a_direct_conversation_is_reported_with_the_peer_and_the_mid() {
 
     let mut api = ApiClient::new(server.uri());
     api.set_token(Some("tok-1".to_string()));
-    api.report_read(ConversationId::User(2), 42)
-        .await
-        .expect("the server accepted the read position");
+    api.report_read(ReadPosition {
+        conversation: ConversationId::User(2),
+        mid: 42,
+    })
+    .await
+    .expect("the server accepted the read position");
 
     server.verify().await;
 }
@@ -55,9 +58,12 @@ async fn a_group_conversation_is_reported_with_the_group_id_and_the_mid() {
 
     let mut api = ApiClient::new(server.uri());
     api.set_token(Some("tok-1".to_string()));
-    api.report_read(ConversationId::Group(8), 42)
-        .await
-        .expect("the server accepted the read position");
+    api.report_read(ReadPosition {
+        conversation: ConversationId::Group(8),
+        mid: 42,
+    })
+    .await
+    .expect("the server accepted the read position");
 
     server.verify().await;
 }
@@ -69,7 +75,9 @@ async fn a_rejected_report_is_classified_for_the_status_line() {
         .and(path("/ri"))
         .respond_with(
             ResponseTemplate::new(500)
-                .set_body_raw(r#""系统异常，请稍后再试""#, "application/json"),
+                // `(StatusCode, ERROR_MESSAGE).into_response()` in `src/err.rs`
+                // is plain text.
+                .set_body_raw("系统异常，请稍后再试", "text/plain; charset=utf-8"),
         )
         .expect(1)
         .mount(&server)
@@ -78,7 +86,10 @@ async fn a_rejected_report_is_classified_for_the_status_line() {
     let mut api = ApiClient::new(server.uri());
     api.set_token(Some("tok-1".to_string()));
     let error = api
-        .report_read(ConversationId::User(2), 42)
+        .report_read(ReadPosition {
+            conversation: ConversationId::User(2),
+            mid: 42,
+        })
         .await
         .expect_err("the server failed");
 
@@ -108,9 +119,12 @@ async fn a_401_on_the_report_is_an_expired_session() {
     api.set_token(Some("expired-token".to_string()));
 
     assert_eq!(
-        api.report_read(ConversationId::User(2), 42)
-            .await
-            .expect_err("the token is rejected"),
+        api.report_read(ReadPosition {
+            conversation: ConversationId::User(2),
+            mid: 42,
+        })
+        .await
+        .expect_err("the token is rejected"),
         ApiError::Unauthorized("无效的Token".to_string())
     );
 }

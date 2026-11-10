@@ -33,6 +33,19 @@ fn found(id: i32, name: &str) -> FoundUser {
     }
 }
 
+/// A JWT-shaped token whose payload is `{"id": uid}`: login now refuses a token
+/// it cannot attribute to a user.
+fn token_for(uid: i32) -> String {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    let header = URL_SAFE_NO_PAD.encode(r#"{{"alg":"HS256","typ":"JWT"}}"#);
+    let payload = URL_SAFE_NO_PAD.encode(format!(
+        r#"{{"id":{uid},"name":"alice","email":null,"phone":null,"exp":9999999999}}"#
+    ));
+    format!("{header}.{payload}.c2lnbmF0dXJl")
+}
+
 fn type_str(machine: &mut Machine, text: &str) {
     for c in text.chars() {
         machine.handle(Event::Key(Key::Char(c)));
@@ -52,7 +65,7 @@ fn logged_in() -> Machine {
         }]
     );
     machine.handle(Event::LoginSucceeded {
-        token: "tok-1".to_string(),
+        token: token_for(1),
     });
     machine
 }
