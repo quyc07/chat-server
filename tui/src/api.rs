@@ -186,6 +186,25 @@ impl ApiClient {
         model::messages_from_json(&body).map_err(|e| ApiError::Decode(e.to_string()))
     }
 
+    /// `PUT /user/{peer}/send` with `{msg}`: send one direct message and return
+    /// the new message id. The id arrives as a JSON string (`"42"`); the model
+    /// layer is the one place that unwraps it. A non-friend peer is a 404 with
+    /// the server's own reason.
+    pub async fn send_message(&self, peer: i32, msg: &str) -> Result<i64, ApiError> {
+        let response = self
+            .authorized(
+                self.http
+                    .put(self.url(&format!("/user/{peer}/send")))
+                    .header(CONTENT_TYPE, "application/json")
+                    .json(&json!({ "msg": msg })),
+            )
+            .send()
+            .await
+            .map_err(map_send_error)?;
+        let body = read_body(response).await?;
+        model::sent_mid_from_json(&body).map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
     /// `GET /user/find/{name}`, a fuzzy match by name returning id+name pairs.
     /// The name is percent-encoded because it is a path segment and may contain
     /// spaces or non-ASCII characters.

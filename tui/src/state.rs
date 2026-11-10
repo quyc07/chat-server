@@ -166,6 +166,21 @@ pub enum Event {
         conversation: ConversationId,
         message: String,
     },
+    /// One optimistic send was accepted: the server assigned `mid`. `time` is
+    /// the client's wall clock when the reply landed; the server's own timestamp
+    /// arrives with the next history load or push.
+    MessageSent {
+        conversation: ConversationId,
+        local_id: u64,
+        mid: i64,
+        time: chrono::NaiveDateTime,
+    },
+    /// One optimistic send was rejected. `message` is already human-readable.
+    MessageSendFailed {
+        conversation: ConversationId,
+        local_id: u64,
+        message: String,
+    },
     UsersFound {
         query: String,
         users: Vec<FoundUser>,
@@ -217,6 +232,13 @@ pub enum Effect {
     /// Fetch the direct-message history for one peer (`GET /user/{peer}/history`).
     LoadMessages {
         peer: i32,
+    },
+    /// `PUT /user/{peer}/send`. `local_id` correlates the optimistic row with the
+    /// [`Event::MessageSent`] / [`Event::MessageSendFailed`] that follows.
+    SendMessage {
+        peer: i32,
+        local_id: u64,
+        text: String,
     },
     FindUsers {
         query: String,
@@ -291,6 +313,56 @@ impl fmt::Debug for Session {
     }
 }
 
+/// Delivery state of one optimistically appended message.
+///
+/// Sending and Failed rows have no server id yet (or never will); Confirmed rows
+/// carry the id the server assigned, which is what makes the row the real
+/// message rather than a duplicate of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Delivery {
+    Sending,
+    Confirmed {
+        mid: i64,
+        time: chrono::NaiveDateTime,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+/// A message the user sent that is not part of the server's history yet.
+///
+/// Pending rows live next to [`State::messages`] instead of inside it so the
+/// server's history stays exactly what the server said, while the optimistic row
+/// can still be reconciled (or marked failed) without being duplicated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingMessage {
+    /// Correlates the row with its HTTP result; unique within the process.
+    pub local_id: u64,
+    pub conversation: ConversationId,
+    pub body: String,
+    pub delivery: Delivery,
+}
+
+impl PendingMessage {
+    /// How the row reads in the message pane. The label is the state's decision,
+    /// not the render layer's.
+    pub fn view(&self, me: &str, now: chrono::NaiveDateTime) -> MessageView {
+        let (time_label, failed) = match &self.delivery {
+            Delivery::Sending => ("发送中…".to_string(), false),
+            Delivery::Confirmed { time, .. } => (crate::model::time_label(*time, now), false),
+            Delivery::Failed { .. } => ("发送失败".to_string(), true),
+        };
+        MessageView {
+            sender: me.to_string(),
+            mine: true,
+            time_label,
+            body: self.body.clone(),
+            failed,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct State {
     pub screen: Screen,
@@ -312,8 +384,16 @@ pub struct State {
     /// Lines scrolled up from the bottom of the message pane. Zero follows the
     /// newest message; the render layer clamps it to the content height.
     pub message_scroll_up: u16,
+    /// The single-line message box. Always the target of typed characters on the
+    /// conversations screen.
+    pub input: String,
+    /// Optimistic sends for every conversation, in the order they were typed.
+    /// Only the active conversation's rows are shown.
+    pub pending: Vec<PendingMessage>,
     session: Option<Session>,
     next_page: u64,
+    /// Monotonic id for [`PendingMessage::local_id`].
+    next_local_id: u64,
 }
 
 impl State {
@@ -333,8 +413,11 @@ impl State {
             messages: Vec::new(),
             messages_loading: false,
             message_scroll_up: 0,
+            input: String::new(),
+            pending: Vec::new(),
             session: None,
             next_page: 1,
+            next_local_id: 0,
         }
     }
 
@@ -362,12 +445,25 @@ impl State {
 
     /// Presentation of the open conversation's history, classified here so the
     /// render layer makes no decisions of its own.
+    ///
+    /// Optimistic rows follow the confirmed history because they are the newest
+    /// thing the user did; rows belonging to another conversation are skipped.
     pub fn message_views(&self, now: chrono::NaiveDateTime) -> Vec<MessageView> {
         let me = self.user_name().unwrap_or_default();
-        self.messages
+        let mut views: Vec<MessageView> = self
+            .messages
             .iter()
             .map(|message| message.view(me, now))
-            .collect()
+            .collect();
+        if let Some(active) = self.active {
+            views.extend(
+                self.pending
+                    .iter()
+                    .filter(|row| row.conversation == active)
+                    .map(|row| row.view(me, now)),
+            );
+        }
+        views
     }
 
     /// How the current window should degrade. Rendering only follows this.
@@ -462,6 +558,17 @@ impl Machine {
                 conversation,
                 message,
             } => self.messages_failed(conversation, message),
+            Event::MessageSent {
+                conversation,
+                local_id,
+                mid,
+                time,
+            } => self.message_sent(conversation, local_id, mid, time),
+            Event::MessageSendFailed {
+                conversation,
+                local_id,
+                message,
+            } => self.message_send_failed(conversation, local_id, message),
             Event::UsersFound { query, users } => self.users_found(query, users),
             Event::UserSearchFailed(message) => self.user_search_failed(message),
             Event::FriendRequestSent { target, outcome } => {
@@ -534,8 +641,9 @@ impl Machine {
 
     fn handle_conversations_key(&mut self, key: Key) -> Vec<Effect> {
         match key {
+            // `q` is no longer a quit key here: the message box owns every
+            // printable character, so a message may start with q.
             Key::Quit | Key::Esc => self.quit(),
-            Key::Char('q') => self.quit(),
             Key::Friends => self.open_friends(),
             Key::Up => {
                 self.state.selected = self.state.selected.saturating_sub(1);
@@ -551,7 +659,20 @@ impl Machine {
                     Vec::new()
                 }
             }
-            Key::Enter => self.reload_selected(),
+            // Enter is for sending. Ctrl-R (mapped as `ToggleMode`, its login-screen
+            // meaning) retries the history load instead.
+            Key::Enter => self.send_message(),
+            Key::ToggleMode => self.reload_selected(),
+            Key::Char(c) => {
+                self.state.input.push(c);
+                Vec::new()
+            }
+            Key::Backspace => {
+                // `String::pop` removes one Unicode scalar, so CJK edits never
+                // split a multi-byte character.
+                self.state.input.pop();
+                Vec::new()
+            }
             Key::PageUp => {
                 self.state.message_scroll_up = self
                     .state
@@ -903,6 +1024,7 @@ impl Machine {
         self.state.conversations.clear();
         self.state.selected = 0;
         self.clear_open_conversation();
+        self.state.pending.clear();
         self.state.friends = FriendsState::default();
         self.state.next_page = 2;
         self.state.loading = true;
@@ -1014,6 +1136,13 @@ impl Machine {
             // The user opened another conversation while this was in flight.
             return Vec::new();
         }
+        // A confirmed optimistic row that the server's history now contains is no
+        // longer optimistic; drop it instead of drawing the same message twice.
+        self.state.pending.retain(|row| {
+            !(row.conversation == conversation
+                && matches!(row.delivery, Delivery::Confirmed { mid, .. }
+                    if items.iter().any(|item| item.mid == mid)))
+        });
         self.state.messages = items;
         self.state.messages_loading = false;
         self.state.message_scroll_up = 0;
@@ -1035,13 +1164,112 @@ impl Machine {
         Vec::new()
     }
 
+    /// Take the message box's text and send it to the open direct conversation.
+    ///
+    /// The row is appended before the request leaves, so the flow never waits for
+    /// the server. `local_id` is what the HTTP result carries back; without it a
+    /// late reply could not find the row it belongs to.
+    fn send_message(&mut self) -> Vec<Effect> {
+        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        let Some(ConversationId::User(peer)) = self.state.active else {
+            // Nothing is open, or it is a group, which phase two owns.
+            return Vec::new();
+        };
+        // Whitespace-only is empty: the server rejects a blank body anyway.
+        let text = self.state.input.trim().to_string();
+        if text.is_empty() {
+            return Vec::new();
+        }
+        let local_id = self.state.next_local_id;
+        self.state.next_local_id += 1;
+        self.state.input.clear();
+        self.state.status = None;
+        self.state.pending.push(PendingMessage {
+            local_id,
+            conversation: ConversationId::User(peer),
+            body: text.clone(),
+            delivery: Delivery::Sending,
+        });
+        vec![Effect::SendMessage {
+            peer,
+            local_id,
+            text,
+        }]
+    }
+
+    /// The server accepted a send: give the optimistic row the id it now has.
+    fn message_sent(
+        &mut self,
+        conversation: ConversationId,
+        local_id: u64,
+        mid: i64,
+        time: chrono::NaiveDateTime,
+    ) -> Vec<Effect> {
+        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        let Some(row) = self
+            .state
+            .pending
+            .iter_mut()
+            .find(|row| row.local_id == local_id && row.conversation == conversation)
+        else {
+            // The row was already reconciled (a history reload that included it).
+            return Vec::new();
+        };
+        row.delivery = Delivery::Confirmed { mid, time };
+        if self.state.active == Some(conversation) {
+            self.state.status = None;
+        }
+        Vec::new()
+    }
+
+    /// The server rejected a send: mark the row, put the text back in the box, and
+    /// explain why on the status line. Nothing is lost, so a retry is one Enter.
+    fn message_send_failed(
+        &mut self,
+        conversation: ConversationId,
+        local_id: u64,
+        message: String,
+    ) -> Vec<Effect> {
+        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        let Some(row) = self
+            .state
+            .pending
+            .iter_mut()
+            .find(|row| row.local_id == local_id && row.conversation == conversation)
+        else {
+            return Vec::new();
+        };
+        let body = row.body.clone();
+        row.delivery = Delivery::Failed {
+            message: message.clone(),
+        };
+        // Never overwrite text the user started typing after the send went out,
+        // and never drop one peer's draft into another peer's box.
+        if self.state.active == Some(conversation) && self.state.input.is_empty() {
+            self.state.input = body;
+        }
+        self.state.status = Some(format!("发送失败：{message}"));
+        Vec::new()
+    }
+
     /// Drop everything private to the open conversation. Used whenever the
     /// session ends so another account never sees the previous history.
+    ///
+    /// The draft is dropped too: carrying it across a conversation switch could
+    /// send it to the wrong person. Pending rows for the old conversation are
+    /// kept (they still have to settle) but not shown while another is open.
     fn clear_open_conversation(&mut self) {
         self.state.active = None;
         self.state.messages.clear();
         self.state.messages_loading = false;
         self.state.message_scroll_up = 0;
+        self.state.input.clear();
     }
 
     fn load_next_page(&mut self) -> Vec<Effect> {
@@ -1077,6 +1305,7 @@ impl Machine {
         self.state.conversations.clear();
         self.state.selected = 0;
         self.clear_open_conversation();
+        self.state.pending.clear();
         self.state.loading = false;
         self.state.has_more = false;
         self.state.friends = FriendsState::default();
@@ -1099,6 +1328,7 @@ impl Machine {
         self.state.conversations.clear();
         self.state.selected = 0;
         self.clear_open_conversation();
+        self.state.pending.clear();
         self.state.loading = false;
         self.state.has_more = false;
         self.state.friends = FriendsState::default();
