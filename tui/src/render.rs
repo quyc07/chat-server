@@ -224,12 +224,7 @@ fn draw_conversation_list(frame: &mut Frame, area: Rect, state: &State) {
         .iter()
         .map(|conversation| ListItem::new(row_line(conversation.row_view(now), compact)))
         .collect();
-    let list = List::new(items)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("");
-    let mut list_state = ListState::default();
-    list_state.select(state.highlighted_index());
-    frame.render_stateful_widget(list, list_area, &mut list_state);
+    render_selectable_list(frame, list_area, items, state.highlighted_index());
 }
 
 /// Several `/open` matches: the user picks one. It takes the message pane's
@@ -239,10 +234,7 @@ fn draw_open_picker(frame: &mut Frame, area: Rect, state: &State) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(format!(" 选择用户 · /open {} ", state.open.query));
+    let block = list_block(&format!("选择用户 · /open {}", state.open.query), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 || inner.width == 0 {
@@ -256,7 +248,7 @@ fn draw_open_picker(frame: &mut Frame, area: Rect, state: &State) {
         ))),
         chunks[0],
     );
-    if chunks[1].height == 0 || chunks[1].width == 0 || state.open.choices.is_empty() {
+    if state.open.choices.is_empty() {
         return;
     }
     let items: Vec<ListItem> = state
@@ -265,13 +257,7 @@ fn draw_open_picker(frame: &mut Frame, area: Rect, state: &State) {
         .iter()
         .map(|user| ListItem::new(format!("{}  #{}", user.name, user.id)))
         .collect();
-    let len = items.len();
-    let list = List::new(items)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("");
-    let mut list_state = ListState::default();
-    list_state.select(Some(state.open.selected.min(len - 1)));
-    frame.render_stateful_widget(list, chunks[1], &mut list_state);
+    render_selectable_list(frame, chunks[1], items, Some(state.open.selected));
 }
 
 fn draw_message_pane(frame: &mut Frame, area: Rect, state: &State) {
@@ -517,15 +503,7 @@ fn draw_friend_list(
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let border_style = if focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(format!(" {title} "));
+    let block = list_block(title, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 || inner.width == 0 {
@@ -538,13 +516,41 @@ fn draw_friend_list(
         );
         return;
     }
+    render_selectable_list(frame, inner, items, Some(selected));
+}
+
+/// A bordered panel that highlights its focused state, shared by the `/open`
+/// chooser and the friends lists.
+fn list_block(title: &str, focused: bool) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(if focused {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        })
+        .title(format!(" {title} "))
+}
+
+/// The one selectable-list body: reversed highlight, blank symbol, clamped
+/// selection. Conversations, `/open` matches, and friends lists all use it so
+/// the highlight cannot drift between them.
+fn render_selectable_list(
+    frame: &mut Frame,
+    area: Rect,
+    items: Vec<ListItem>,
+    selected: Option<usize>,
+) {
+    if area.height == 0 || area.width == 0 || items.is_empty() {
+        return;
+    }
     let len = items.len();
     let list = List::new(items)
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("");
     let mut list_state = ListState::default();
-    list_state.select(Some(selected.min(len - 1)));
-    frame.render_stateful_widget(list, inner, &mut list_state);
+    list_state.select(selected.map(|index| index.min(len - 1)));
+    frame.render_stateful_widget(list, area, &mut list_state);
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, state: &State) {
