@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::model::MessageView;
-use crate::state::{Focus, LayoutMode, LoginMode, RowView, Screen, State};
+use crate::state::{Focus, FriendsFocus, LayoutMode, LoginMode, Notice, RowView, Screen, State};
 
 pub fn draw(frame: &mut Frame, state: &State) {
     let area = frame.area();
@@ -31,6 +31,7 @@ pub fn draw(frame: &mut Frame, state: &State) {
     match state.screen {
         Screen::Login => draw_login(frame, body, state),
         Screen::Conversations => draw_conversations(frame, body, state),
+        Screen::Friends => draw_friends(frame, body, state),
     }
     draw_status(frame, status, state);
 }
@@ -154,7 +155,7 @@ fn draw_conversations_header(frame: &mut Frame, area: Rect, state: &State) {
             Span::styled(who.to_string(), Style::default().fg(Color::DarkGray)),
             Span::raw("   "),
             Span::styled(
-                "↑/↓ 选择 · Enter 重新加载 · PgUp/PgDn 滚动消息 · q 退出",
+                "↑/↓ 选择 · Enter 重新加载 · PgUp/PgDn 滚动消息 · Ctrl-F 好友 · q 退出",
                 Style::default().fg(Color::DarkGray),
             ),
         ])),
@@ -302,8 +303,176 @@ fn row_line(row: RowView, compact: bool) -> Line<'static> {
     Line::from(spans)
 }
 
+fn draw_friends(frame: &mut Frame, area: Rect, state: &State) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(3),
+        Constraint::Min(3),
+        Constraint::Min(3),
+    ])
+    .split(area);
+
+    let who = state.user_name().unwrap_or("?");
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("好友", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled(who.to_string(), Style::default().fg(Color::DarkGray)),
+            Span::raw("   "),
+            Span::styled(
+                "Tab 切换 · Enter 搜索/发送/通过 · r 拒绝 · Esc 返回",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])),
+        chunks[0],
+    );
+
+    let search_focused = state.friends.focus == FriendsFocus::Search;
+    let search_style = if search_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default()
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(if search_focused { "❯" } else { " " }, search_style),
+            Span::raw(" 搜索 "),
+            Span::styled(
+                state.friends.query.clone(),
+                search_style.add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(if search_focused { "▏" } else { "" }, search_style),
+        ])),
+        chunks[1],
+    );
+
+    let now = Local::now().naive_local();
+    let results: Vec<ListItem> = state
+        .friends
+        .results
+        .iter()
+        .map(|user| ListItem::new(format!("{}  #{}", user.name, user.id)))
+        .collect();
+    let result_hint = if state.friends.searching {
+        "搜索中…"
+    } else {
+        "输入用户名后按 Enter 搜索"
+    };
+    draw_friend_list(
+        frame,
+        chunks[2],
+        "搜索结果",
+        state.friends.focus == FriendsFocus::Results,
+        results,
+        state.friends.selected_result,
+        result_hint,
+    );
+
+    let requests: Vec<ListItem> = state
+        .friends
+        .requests
+        .iter()
+        .map(|request| {
+            let reason = request
+                .reason
+                .as_deref()
+                .filter(|reason| !reason.is_empty())
+                .map(|reason| format!(" · {reason}"))
+                .unwrap_or_default();
+            let time = crate::model::time_label(request.create_time, now);
+            ListItem::new(format!("{}  {}{}", request.request_name, time, reason))
+        })
+        .collect();
+    let request_hint = if state.friends.loading_requests {
+        "加载中…"
+    } else {
+        "没有待处理的好友请求"
+    };
+    draw_friend_list(
+        frame,
+        chunks[3],
+        "待处理请求 · Enter 通过 · r 拒绝",
+        state.friends.focus == FriendsFocus::Requests,
+        requests,
+        state.friends.selected_request,
+        request_hint,
+    );
+
+    let friends: Vec<ListItem> = state
+        .friends
+        .friends
+        .iter()
+        .map(|friend| ListItem::new(friend.name.clone()))
+        .collect();
+    let friend_hint = if state.friends.loading_friends {
+        "加载中…"
+    } else {
+        "还没有好友，先搜索并发送请求"
+    };
+    draw_friend_list(
+        frame,
+        chunks[4],
+        "好友",
+        state.friends.focus == FriendsFocus::Friends,
+        friends,
+        state.friends.selected_friend,
+        friend_hint,
+    );
+}
+
+fn draw_friend_list(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    focused: bool,
+    items: Vec<ListItem>,
+    selected: usize,
+    empty_hint: &str,
+) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(format!(" {title} "));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    if items.is_empty() {
+        frame.render_widget(
+            Paragraph::new(empty_hint).style(Style::default().fg(Color::DarkGray)),
+            inner,
+        );
+        return;
+    }
+    let len = items.len();
+    let list = List::new(items)
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("");
+    let mut list_state = ListState::default();
+    list_state.select(Some(selected.min(len - 1)));
+    frame.render_stateful_widget(list, inner, &mut list_state);
+}
+
 fn draw_status(frame: &mut Frame, area: Rect, state: &State) {
     if area.height == 0 || area.width == 0 {
+        return;
+    }
+    if state.screen == Screen::Friends {
+        let (text, style) = friends_status(state);
+        frame.render_widget(Paragraph::new(text).style(style), area);
         return;
     }
     let (text, style) = match &state.status {
@@ -321,5 +490,23 @@ fn status_text(state: &State) -> &'static str {
     match state.screen {
         Screen::Login => "请输入用户名和密码",
         Screen::Conversations => "就绪",
+        Screen::Friends => "好友",
+    }
+}
+
+/// Info notices (already a friend, request already waiting, forbidden) are not
+/// failures, so they must not borrow the error colour.
+fn friends_status(state: &State) -> (String, Style) {
+    match &state.friends.notice {
+        Some(Notice::Info(message)) => (message.clone(), Style::default().fg(Color::Green)),
+        Some(Notice::Error(message)) => (message.clone(), Style::default().fg(Color::Red)),
+        None if state.friends.loading_requests || state.friends.loading_friends => (
+            "正在加载好友数据…".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ),
+        None => (
+            "搜索用户，或处理待处理的好友请求".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ),
     }
 }
