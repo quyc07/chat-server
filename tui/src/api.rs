@@ -10,7 +10,10 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, StatusCode};
 use serde_json::json;
 
-use crate::model::{self, Conversation, LoginWire};
+use crate::model::{
+    self, Conversation, FoundUser, Friend, FriendDecision, FriendRequest, LoginWire, ReviewOutcome,
+    SendOutcome,
+};
 
 /// How long a request may take before the UI reports the server unreachable.
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -169,6 +172,142 @@ impl ApiClient {
         model::conversations_from_json(&body).map_err(|e| ApiError::Decode(e.to_string()))
     }
 
+    /// `GET /user/find/{name}`, a fuzzy match by name returning id+name pairs.
+    /// The name is percent-encoded because it is a path segment and may contain
+    /// spaces or non-ASCII characters.
+    pub async fn find_users(&self, name: &str) -> Result<Vec<FoundUser>, ApiError> {
+        let mut url = reqwest::Url::parse(&self.url("/user/find"))
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        url.path_segments_mut()
+            .map_err(|_| ApiError::Unreachable("无法构造搜索地址".to_string()))?
+            .push(name);
+        let response = self
+            .authorized(self.http.get(url))
+            .send()
+            .await
+            .map_err(map_send_error)?;
+        let body = read_body(response).await?;
+        model::found_users_from_json(&body).map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// `GET /friend/req`, every inbound request; the state machine keeps the
+    /// pending ones.
+    pub async fn friend_requests(&self) -> Result<Vec<FriendRequest>, ApiError> {
+        let response = self
+            .authorized(self.http.get(self.url("/friend/req")))
+            .send()
+            .await
+            .map_err(map_send_error)?;
+        let body = read_body(response).await?;
+        model::friend_requests_from_json(&body).map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// `GET /friend`, the friend list.
+    pub async fn friends(&self) -> Result<Vec<Friend>, ApiError> {
+        let response = self
+            .authorized(self.http.get(self.url("/friend")))
+            .send()
+            .await
+            .map_err(map_send_error)?;
+        let body = read_body(response).await?;
+        model::friends_from_json(&body).map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// `POST /friend/req/{uid}`. 200 means the request was created; 201 carries
+    /// "already a friend" or "already waiting" in its body and 403 is a refusal.
+    /// All three are outcomes the status line explains, never crashes.
+    pub async fn send_friend_request(
+        &self,
+        uid: i32,
+        reason: Option<&str>,
+    ) -> Result<SendOutcome, ApiError> {
+        let response = self
+            .authorized(
+                self.http
+                    .post(self.url(&format!("/friend/req/{uid}")))
+                    .header(CONTENT_TYPE, "application/json")
+                    .json(&json!({ "reason": reason })),
+            )
+            .send()
+            .await
+            .map_err(map_send_error)?;
+        let (status, body) = read_raw(response).await?;
+        let message = server_message(&body);
+
+        if status == StatusCode::FORBIDDEN {
+            return Ok(SendOutcome::Forbidden(message));
+        }
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(ApiError::Unauthorized(message));
+        }
+        if status.is_success() {
+            if status == StatusCode::CREATED {
+                return Ok(if message.contains("已经是好友") {
+                    SendOutcome::AlreadyFriend
+                } else if message.contains("等待") {
+                    SendOutcome::AlreadyWaiting
+                } else {
+                    // An unknown 201 still means the request exists; do not turn
+                    // it into a failure.
+                    SendOutcome::Sent
+                });
+            }
+            return Ok(SendOutcome::Sent);
+        }
+        Err(ApiError::Status {
+            status: status.as_u16(),
+            message,
+        })
+    }
+
+    /// `POST /friend/req` with `{id, status}`. 403 means the caller is not the
+    /// request's target and is surfaced as a readable outcome, not an error.
+    pub async fn review_friend_request(
+        &self,
+        id: i32,
+        decision: FriendDecision,
+    ) -> Result<ReviewOutcome, ApiError> {
+        let status = match decision {
+            FriendDecision::Approve => "APPROVE",
+            FriendDecision::Reject => "REJECT",
+        };
+        let response = self
+            .authorized(
+                self.http
+                    .post(self.url("/friend/req"))
+                    .header(CONTENT_TYPE, "application/json")
+                    .json(&json!({ "id": id, "status": status })),
+            )
+            .send()
+            .await
+            .map_err(map_send_error)?;
+        let (status, body) = read_raw(response).await?;
+        let message = server_message(&body);
+
+        if status == StatusCode::FORBIDDEN {
+            return Ok(ReviewOutcome::Forbidden(message));
+        }
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(ApiError::Unauthorized(message));
+        }
+        if status.is_success() {
+            return Ok(ReviewOutcome::Reviewed);
+        }
+        Err(ApiError::Status {
+            status: status.as_u16(),
+            message,
+        })
+    }
+
+    /// Attach the in-memory token when there is one. New calls share this
+    /// helper; the existing history call keeps its inline header.
+    fn authorized(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.token {
+            Some(token) => request.header(AUTHORIZATION, format!("Bearer {token}")),
+            None => request,
+        }
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }
@@ -193,6 +332,14 @@ async fn read_body(response: reqwest::Response) -> Result<Vec<u8>, ApiError> {
             message,
         })
     }
+}
+
+/// Read a response without judging it: the friends endpoints attach meaning to
+/// 201 and 403, so the caller needs both the status and the body.
+async fn read_raw(response: reqwest::Response) -> Result<(StatusCode, Vec<u8>), ApiError> {
+    let status = response.status();
+    let bytes = response.bytes().await.map_err(map_send_error)?;
+    Ok((status, bytes.to_vec()))
 }
 
 /// The server's error bodies are either a JSON string (`Json(err.to_string())`,

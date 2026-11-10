@@ -9,7 +9,10 @@
 use std::fmt;
 use std::time::Duration;
 
-use crate::model::{Conversation, ConversationId};
+use crate::model::{
+    Conversation, ConversationId, FoundUser, Friend, FriendDecision, FriendRequest,
+    FriendRequestStatus, ReviewOutcome, SendOutcome,
+};
 
 /// The server caps `PageReq.limit` at 50; the client asks for as much as allowed.
 pub const PAGE_LIMIT: u64 = 50;
@@ -22,6 +25,7 @@ pub const RELOGIN_AFTER: Duration = Duration::from_secs(50 * 60);
 pub enum Screen {
     Login,
     Conversations,
+    Friends,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -63,6 +67,60 @@ pub enum Key {
     Esc,
     /// Ctrl-C, always quits.
     Quit,
+    /// Open the friends screen from the conversation list (Ctrl-F).
+    Friends,
+}
+
+/// How an outcome should read on the status line.
+///
+/// The server reports "already a friend", "request already waiting", and even a
+/// forbidden review as meaningful text rather than ordinary failures. Those are
+/// [`Notice::Info`]: the status line must not paint them as errors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Notice {
+    Info(String),
+    Error(String),
+}
+
+/// Which friends section owns the keyboard. `Tab` cycles in this order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FriendsFocus {
+    #[default]
+    Search,
+    Results,
+    Requests,
+    Friends,
+}
+
+impl FriendsFocus {
+    fn next(self) -> Self {
+        match self {
+            FriendsFocus::Search => FriendsFocus::Results,
+            FriendsFocus::Results => FriendsFocus::Requests,
+            FriendsFocus::Requests => FriendsFocus::Friends,
+            FriendsFocus::Friends => FriendsFocus::Search,
+        }
+    }
+}
+
+/// The friends screen: one query box and three lists, all decided here.
+#[derive(Debug, Clone, Default)]
+pub struct FriendsState {
+    pub focus: FriendsFocus,
+    /// The submitted search text, kept trimmed so a stale reply can be dropped.
+    pub query: String,
+    pub results: Vec<FoundUser>,
+    pub selected_result: usize,
+    pub searching: bool,
+    /// Only requests whose status is still waiting; approved/rejected ones are
+    /// history the UI does not need.
+    pub requests: Vec<FriendRequest>,
+    pub selected_request: usize,
+    pub friends: Vec<Friend>,
+    pub selected_friend: usize,
+    pub loading_requests: bool,
+    pub loading_friends: bool,
+    pub notice: Option<Notice>,
 }
 
 /// Something that happened, translated from the outside world.
@@ -92,6 +150,29 @@ pub enum Event {
         width: u16,
         height: u16,
     },
+    UsersFound {
+        query: String,
+        users: Vec<FoundUser>,
+    },
+    UserSearchFailed(String),
+    FriendRequestSent {
+        target: String,
+        outcome: SendOutcome,
+    },
+    FriendRequestSendFailed {
+        target: String,
+        message: String,
+    },
+    FriendRequestsLoaded(Vec<FriendRequest>),
+    FriendRequestsFailed(String),
+    FriendsLoaded(Vec<Friend>),
+    FriendsFailed(String),
+    FriendRequestReviewed {
+        request_id: i32,
+        decision: FriendDecision,
+        outcome: ReviewOutcome,
+    },
+    FriendRequestReviewFailed(String),
 }
 
 /// Work the wiring layer must perform. The state machine has already committed
@@ -118,6 +199,18 @@ pub enum Effect {
         token: String,
     },
     Quit,
+    FindUsers {
+        query: String,
+    },
+    SendFriendRequest {
+        target: FoundUser,
+    },
+    LoadFriendRequests,
+    LoadFriends,
+    ReviewFriendRequest {
+        request: FriendRequest,
+        decision: FriendDecision,
+    },
 }
 
 /// Whether the current window can show the full layout, a compact one, or only a
@@ -188,6 +281,7 @@ pub struct State {
     pub selected: usize,
     pub loading: bool,
     pub has_more: bool,
+    pub friends: FriendsState,
     pub viewport: Viewport,
     pub quit: bool,
     session: Option<Session>,
@@ -204,6 +298,7 @@ impl State {
             selected: 0,
             loading: false,
             has_more: false,
+            friends: FriendsState::default(),
             viewport: Viewport::default(),
             quit: false,
             session: None,
@@ -311,6 +406,24 @@ impl Machine {
                 self.state.viewport = Viewport { width, height };
                 Vec::new()
             }
+            Event::UsersFound { query, users } => self.users_found(query, users),
+            Event::UserSearchFailed(message) => self.user_search_failed(message),
+            Event::FriendRequestSent { target, outcome } => {
+                self.friend_request_sent(target, outcome)
+            }
+            Event::FriendRequestSendFailed { target, message } => {
+                self.friend_request_send_failed(target, message)
+            }
+            Event::FriendRequestsLoaded(items) => self.friend_requests_loaded(items),
+            Event::FriendRequestsFailed(message) => self.friend_requests_failed(message),
+            Event::FriendsLoaded(items) => self.friends_loaded(items),
+            Event::FriendsFailed(message) => self.friends_failed(message),
+            Event::FriendRequestReviewed {
+                request_id,
+                decision,
+                outcome,
+            } => self.friend_request_reviewed(request_id, decision, outcome),
+            Event::FriendRequestReviewFailed(message) => self.friend_request_review_failed(message),
         }
     }
 
@@ -318,6 +431,7 @@ impl Machine {
         match self.state.screen {
             Screen::Login => self.handle_login_key(key),
             Screen::Conversations => self.handle_conversations_key(key),
+            Screen::Friends => self.handle_friends_key(key),
         }
     }
 
@@ -366,6 +480,7 @@ impl Machine {
         match key {
             Key::Quit | Key::Esc => self.quit(),
             Key::Char('q') => self.quit(),
+            Key::Friends => self.open_friends(),
             Key::Up => {
                 self.state.selected = self.state.selected.saturating_sub(1);
                 Vec::new()
@@ -382,6 +497,304 @@ impl Machine {
             }
             _ => Vec::new(),
         }
+    }
+
+    fn open_friends(&mut self) -> Vec<Effect> {
+        if self.state.screen != Screen::Conversations || !self.state.is_logged_in() {
+            return Vec::new();
+        }
+        self.state.screen = Screen::Friends;
+        self.state.friends.focus = FriendsFocus::Search;
+        self.state.friends.notice = None;
+        self.state.friends.loading_requests = true;
+        self.state.friends.loading_friends = true;
+        vec![Effect::LoadFriendRequests, Effect::LoadFriends]
+    }
+
+    fn handle_friends_key(&mut self, key: Key) -> Vec<Effect> {
+        match key {
+            Key::Quit => self.quit(),
+            Key::Esc => {
+                self.state.screen = Screen::Conversations;
+                self.state.friends.notice = None;
+                Vec::new()
+            }
+            Key::Tab => {
+                self.state.friends.focus = self.state.friends.focus.next();
+                Vec::new()
+            }
+            Key::Up => {
+                self.move_friend_selection(false);
+                Vec::new()
+            }
+            Key::Down => {
+                self.move_friend_selection(true);
+                Vec::new()
+            }
+            Key::Enter => self.friends_enter(),
+            Key::Backspace if self.state.friends.focus == FriendsFocus::Search => {
+                self.state.friends.query.pop();
+                Vec::new()
+            }
+            Key::Char(c) => self.friends_char(c),
+            _ => Vec::new(),
+        }
+    }
+
+    fn friends_char(&mut self, c: char) -> Vec<Effect> {
+        match self.state.friends.focus {
+            FriendsFocus::Search => {
+                self.state.friends.query.push(c);
+                Vec::new()
+            }
+            FriendsFocus::Requests => match c {
+                'a' => self.review_selected(FriendDecision::Approve),
+                'r' => self.review_selected(FriendDecision::Reject),
+                _ => Vec::new(),
+            },
+            FriendsFocus::Results | FriendsFocus::Friends => Vec::new(),
+        }
+    }
+
+    fn friends_enter(&mut self) -> Vec<Effect> {
+        match self.state.friends.focus {
+            FriendsFocus::Search => {
+                let query = self.state.friends.query.trim().to_string();
+                if query.is_empty() {
+                    self.state.friends.notice =
+                        Some(Notice::Info("请输入要搜索的用户名".to_string()));
+                    return Vec::new();
+                }
+                self.state.friends.query = query.clone();
+                self.state.friends.searching = true;
+                self.state.friends.notice = None;
+                vec![Effect::FindUsers { query }]
+            }
+            FriendsFocus::Results => match self
+                .state
+                .friends
+                .results
+                .get(self.state.friends.selected_result)
+            {
+                Some(target) => vec![Effect::SendFriendRequest {
+                    target: target.clone(),
+                }],
+                None => Vec::new(),
+            },
+            FriendsFocus::Requests => self.review_selected(FriendDecision::Approve),
+            FriendsFocus::Friends => Vec::new(),
+        }
+    }
+
+    fn review_selected(&mut self, decision: FriendDecision) -> Vec<Effect> {
+        match self
+            .state
+            .friends
+            .requests
+            .get(self.state.friends.selected_request)
+        {
+            Some(request) => vec![Effect::ReviewFriendRequest {
+                request: request.clone(),
+                decision,
+            }],
+            None => Vec::new(),
+        }
+    }
+
+    fn move_friend_selection(&mut self, down: bool) {
+        let friends = &mut self.state.friends;
+        let (selected, len) = match friends.focus {
+            FriendsFocus::Results => (&mut friends.selected_result, friends.results.len()),
+            FriendsFocus::Requests => (&mut friends.selected_request, friends.requests.len()),
+            FriendsFocus::Friends => (&mut friends.selected_friend, friends.friends.len()),
+            FriendsFocus::Search => return,
+        };
+        if len == 0 {
+            *selected = 0;
+        } else if down {
+            if *selected + 1 < len {
+                *selected += 1;
+            }
+        } else {
+            *selected = selected.saturating_sub(1);
+        }
+    }
+
+    fn users_found(&mut self, query: String, users: Vec<FoundUser>) -> Vec<Effect> {
+        if !self.friends_active() || query != self.state.friends.query {
+            return Vec::new();
+        }
+        self.state.friends.searching = false;
+        self.state.friends.results = users;
+        self.state.friends.selected_result = 0;
+        self.state.friends.notice = if self.state.friends.results.is_empty() {
+            Some(Notice::Info(format!("没有找到匹配“{query}”的用户")))
+        } else {
+            None
+        };
+        Vec::new()
+    }
+
+    fn user_search_failed(&mut self, message: String) -> Vec<Effect> {
+        if !self.friends_active() {
+            return Vec::new();
+        }
+        self.state.friends.searching = false;
+        self.state.friends.notice = Some(Notice::Error(message));
+        Vec::new()
+    }
+
+    fn friend_request_sent(&mut self, target: String, outcome: SendOutcome) -> Vec<Effect> {
+        if !self.friends_active() {
+            return Vec::new();
+        }
+        let (notice, effects) = match outcome {
+            SendOutcome::Sent => (
+                Notice::Info(format!("已向 {target} 发送好友请求")),
+                Vec::new(),
+            ),
+            // The server answers 201 for these; they are information, not errors.
+            SendOutcome::AlreadyFriend => (
+                Notice::Info(format!("{target} 已经是你的好友")),
+                vec![Effect::LoadFriends],
+            ),
+            SendOutcome::AlreadyWaiting => (
+                Notice::Info(format!("已向 {target} 发送过好友请求，正在等待对方处理")),
+                Vec::new(),
+            ),
+            SendOutcome::Forbidden(reason) => (
+                Notice::Info(readable(
+                    reason,
+                    format!("暂时无法向 {target} 发送好友请求"),
+                )),
+                Vec::new(),
+            ),
+        };
+        self.state.friends.notice = Some(notice);
+        effects
+    }
+
+    fn friend_request_send_failed(&mut self, target: String, message: String) -> Vec<Effect> {
+        if !self.friends_active() {
+            return Vec::new();
+        }
+        self.state.friends.notice = Some(Notice::Error(format!(
+            "向 {target} 发送好友请求失败：{message}"
+        )));
+        Vec::new()
+    }
+
+    fn friend_requests_loaded(&mut self, items: Vec<FriendRequest>) -> Vec<Effect> {
+        if !self.friends_active() {
+            return Vec::new();
+        }
+        // The endpoint returns every inbound request, whatever its status. Only
+        // waiting ones are actionable.
+        let mut pending: Vec<FriendRequest> = items
+            .into_iter()
+            .filter(|request| request.status == FriendRequestStatus::Wait)
+            .collect();
+        pending.sort_by(|a, b| b.create_time.cmp(&a.create_time));
+        self.state.friends.requests = pending;
+        clamp(
+            &mut self.state.friends.selected_request,
+            self.state.friends.requests.len(),
+        );
+        self.state.friends.loading_requests = false;
+        Vec::new()
+    }
+
+    fn friend_requests_failed(&mut self, message: String) -> Vec<Effect> {
+        if !self.friends_active() {
+            return Vec::new();
+        }
+        self.state.friends.loading_requests = false;
+        self.state.friends.notice = Some(Notice::Error(message));
+        Vec::new()
+    }
+
+    fn friends_loaded(&mut self, items: Vec<Friend>) -> Vec<Effect> {
+        if !self.friends_active() {
+            return Vec::new();
+        }
+        self.state.friends.friends = items;
+        clamp(
+            &mut self.state.friends.selected_friend,
+            self.state.friends.friends.len(),
+        );
+        self.state.friends.loading_friends = false;
+        Vec::new()
+    }
+
+    fn friends_failed(&mut self, message: String) -> Vec<Effect> {
+        if !self.friends_active() {
+            return Vec::new();
+        }
+        self.state.friends.loading_friends = false;
+        self.state.friends.notice = Some(Notice::Error(message));
+        Vec::new()
+    }
+
+    fn friend_request_reviewed(
+        &mut self,
+        request_id: i32,
+        decision: FriendDecision,
+        outcome: ReviewOutcome,
+    ) -> Vec<Effect> {
+        if !self.friends_active() {
+            return Vec::new();
+        }
+        match outcome {
+            ReviewOutcome::Reviewed => {
+                let name = self
+                    .state
+                    .friends
+                    .requests
+                    .iter()
+                    .find(|request| request.id == request_id)
+                    .map(|request| request.request_name.clone())
+                    .unwrap_or_else(|| "该用户".to_string());
+                self.state
+                    .friends
+                    .requests
+                    .retain(|request| request.id != request_id);
+                clamp(
+                    &mut self.state.friends.selected_request,
+                    self.state.friends.requests.len(),
+                );
+                let action = match decision {
+                    FriendDecision::Approve => "已通过",
+                    FriendDecision::Reject => "已拒绝",
+                };
+                self.state.friends.notice =
+                    Some(Notice::Info(format!("{action} {name} 的好友请求")));
+                match decision {
+                    // Approval creates the relationship server-side; pull the
+                    // authoritative list instead of guessing locally.
+                    FriendDecision::Approve => vec![Effect::LoadFriends],
+                    FriendDecision::Reject => Vec::new(),
+                }
+            }
+            ReviewOutcome::Forbidden(reason) => {
+                self.state.friends.notice = Some(Notice::Info(readable(
+                    reason,
+                    "无权处理该好友请求".to_string(),
+                )));
+                Vec::new()
+            }
+        }
+    }
+
+    fn friend_request_review_failed(&mut self, message: String) -> Vec<Effect> {
+        if !self.friends_active() {
+            return Vec::new();
+        }
+        self.state.friends.notice = Some(Notice::Error(format!("处理好友请求失败：{message}")));
+        Vec::new()
+    }
+
+    fn friends_active(&self) -> bool {
+        self.state.screen == Screen::Friends && self.state.is_logged_in()
     }
 
     fn submit_login(&mut self) -> Vec<Effect> {
@@ -418,6 +831,7 @@ impl Machine {
         self.state.status = None;
         self.state.conversations.clear();
         self.state.selected = 0;
+        self.state.friends = FriendsState::default();
         self.state.next_page = 2;
         self.state.loading = true;
         self.since_login = Duration::ZERO;
@@ -494,6 +908,7 @@ impl Machine {
         self.state.selected = 0;
         self.state.loading = false;
         self.state.has_more = false;
+        self.state.friends = FriendsState::default();
         self.since_login = Duration::ZERO;
         self.relogin_inflight = false;
         Vec::new()
@@ -514,13 +929,14 @@ impl Machine {
         self.state.selected = 0;
         self.state.loading = false;
         self.state.has_more = false;
+        self.state.friends = FriendsState::default();
         self.since_login = Duration::ZERO;
         self.relogin_inflight = false;
         Vec::new()
     }
 
     fn tick(&mut self, elapsed: Duration) -> Vec<Effect> {
-        if self.state.screen != Screen::Conversations
+        if !matches!(self.state.screen, Screen::Conversations | Screen::Friends)
             || !self.state.is_logged_in()
             || self.relogin_inflight
         {
@@ -548,6 +964,24 @@ impl Machine {
         }
         effects.push(Effect::Quit);
         effects
+    }
+}
+
+/// Keep a list selection inside its list after the data changes.
+fn clamp(selected: &mut usize, len: usize) {
+    if len == 0 {
+        *selected = 0;
+    } else if *selected >= len {
+        *selected = len - 1;
+    }
+}
+
+/// A server-supplied reason, or a fallback when it sent none.
+fn readable(reason: String, fallback: String) -> String {
+    if reason.trim().is_empty() {
+        fallback
+    } else {
+        reason
     }
 }
 

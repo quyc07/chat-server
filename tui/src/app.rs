@@ -110,6 +110,78 @@ async fn event_loop(
                     let _ = time::timeout(LOGOUT_TIMEOUT, api.logout_with(&token)).await;
                     api.set_token(None);
                 }
+                Effect::FindUsers { query } => {
+                    let api = api.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let event = match api.find_users(&query).await {
+                            Ok(users) => Event::UsersFound { query, users },
+                            Err(ApiError::Unauthorized(_)) => Event::TokenExpired,
+                            Err(error) => Event::UserSearchFailed(error.message()),
+                        };
+                        let _ = tx.send(event);
+                    });
+                }
+                Effect::SendFriendRequest { target } => {
+                    let api = api.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let target_name = target.name.clone();
+                        let event = match api.send_friend_request(target.id, None).await {
+                            Ok(outcome) => Event::FriendRequestSent {
+                                target: target_name.clone(),
+                                outcome,
+                            },
+                            Err(ApiError::Unauthorized(_)) => Event::TokenExpired,
+                            Err(error) => Event::FriendRequestSendFailed {
+                                target: target_name,
+                                message: error.message(),
+                            },
+                        };
+                        let _ = tx.send(event);
+                    });
+                }
+                Effect::LoadFriendRequests => {
+                    let api = api.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let event = match api.friend_requests().await {
+                            Ok(items) => Event::FriendRequestsLoaded(items),
+                            Err(ApiError::Unauthorized(_)) => Event::TokenExpired,
+                            Err(error) => Event::FriendRequestsFailed(error.message()),
+                        };
+                        let _ = tx.send(event);
+                    });
+                }
+                Effect::LoadFriends => {
+                    let api = api.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let event = match api.friends().await {
+                            Ok(items) => Event::FriendsLoaded(items),
+                            Err(ApiError::Unauthorized(_)) => Event::TokenExpired,
+                            Err(error) => Event::FriendsFailed(error.message()),
+                        };
+                        let _ = tx.send(event);
+                    });
+                }
+                Effect::ReviewFriendRequest { request, decision } => {
+                    let api = api.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let request_id = request.id;
+                        let event = match api.review_friend_request(request.id, decision).await {
+                            Ok(outcome) => Event::FriendRequestReviewed {
+                                request_id,
+                                decision,
+                                outcome,
+                            },
+                            Err(ApiError::Unauthorized(_)) => Event::TokenExpired,
+                            Err(error) => Event::FriendRequestReviewFailed(error.message()),
+                        };
+                        let _ = tx.send(event);
+                    });
+                }
                 Effect::Quit => return Ok(()),
             }
         }
@@ -173,6 +245,7 @@ fn map_key(key: KeyEvent) -> Option<Key> {
         return match key.code {
             KeyCode::Char('c') => Some(Key::Quit),
             KeyCode::Char('r') => Some(Key::ToggleMode),
+            KeyCode::Char('f') => Some(Key::Friends),
             _ => None,
         };
     }
