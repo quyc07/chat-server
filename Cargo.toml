@@ -1,4 +1,4 @@
-workspace = { members = ["entity", "migration", "msg"] }
+workspace = { members = ["entity", "migration", "msg", "tui"] }
 [package]
 name = "chat-server"
 version = "0.1.1"
