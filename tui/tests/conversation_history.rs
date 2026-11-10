@@ -39,6 +39,17 @@ fn type_str(machine: &mut Machine, text: &str) {
     }
 }
 
+/// A JWT-shaped access token whose payload is `{"id":1,...}`: the state machine
+/// reads the caller's uid out of it, and `message_views` needs that uid to tell
+/// alice's own rows from bob's. `c2ln` is the (unchecked) signature segment.
+const ALICE_TOKEN: &str = concat!(
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    ".",
+    "eyJpZCI6MSwibmFtZSI6ImFsaWNlIiwiZW1haWwiOm51bGwsInBob25lIjpudWxsLCJleHAiOjk5OTk5OTk5OTl9",
+    ".",
+    "c2lnbmF0dXJl"
+);
+
 fn logged_in() -> Machine {
     let mut machine = Machine::new();
     type_str(&mut machine, "alice");
@@ -46,7 +57,7 @@ fn logged_in() -> Machine {
     type_str(&mut machine, "s3cret");
     machine.handle(Event::Key(Key::Enter));
     machine.handle(Event::LoginSucceeded {
-        token: "tok-1".to_string(),
+        token: ALICE_TOKEN.to_string(),
     });
     machine
 }

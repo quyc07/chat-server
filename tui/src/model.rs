@@ -76,6 +76,10 @@ pub enum WireError {
     FriendJson(String),
     #[error("invalid server timestamp {0:?}: {1}")]
     Time(String, String),
+    #[error("invalid access token: {0}")]
+    Token(String),
+    #[error("invalid event-stream payload: {0}")]
+    Stream(String),
 }
 
 /// The server's `ChatVo`, field-for-field. The `DateTime<Local>` fields on the
@@ -173,10 +177,14 @@ pub struct Message {
 
 impl Message {
     /// Decide how the bubble is presented. Rendering only paints this.
-    pub fn view(&self, me: &str, now: NaiveDateTime) -> MessageView {
+    ///
+    /// Authorship comes from the immutable sender id, never from the display
+    /// name: usernames are not unique on this server, so comparing names would
+    /// label a same-named peer's messages as our own.
+    pub fn view(&self, me_uid: Option<i32>, now: NaiveDateTime) -> MessageView {
         MessageView {
             sender: self.from_name.clone(),
-            mine: self.from_name == me,
+            mine: me_uid.is_some_and(|uid| uid == self.from_uid),
             time_label: time_label(self.time, now),
             body: self.body.clone(),
         }
@@ -413,4 +421,176 @@ fn parse_request_status(raw: &str) -> FriendRequestStatus {
         "REJECT" => FriendRequestStatus::Reject,
         _ => FriendRequestStatus::Wait,
     }
+}
+
+/// The server never returns the caller's uid at login, but the JWT payload
+/// carries it as `id` (`src/auth.rs::Token`). The payload is the middle segment
+/// of the token and is base64url without padding; the signature is not verified
+/// here because the server is the one that issued it to this process.
+pub fn uid_from_token(token: &str) -> Result<i32, WireError> {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[derive(Deserialize)]
+    struct Claims {
+        id: i32,
+    }
+
+    let payload = token
+        .split('.')
+        .nth(1)
+        .ok_or_else(|| WireError::Token("token has no payload segment".to_string()))?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|e| WireError::Token(e.to_string()))?;
+    let claims: Claims =
+        serde_json::from_slice(&bytes).map_err(|e| WireError::Token(e.to_string()))?;
+    Ok(claims.id)
+}
+
+/// A chat message as it arrives on the event stream.
+///
+/// The push shape is not the history shape: the stream nests the text three
+/// levels deep (`payload.detail.Normal.content.content`) and carries the target
+/// instead of naming the conversation. It also has no sender name, only
+/// `from_uid`, so the state machine attaches the name from the conversation row
+/// (or asks `/user/detail/{uid}` for a peer it has never seen).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamChat {
+    pub mid: i64,
+    pub from_uid: i32,
+    /// The user or group the sender addressed.
+    pub target: ConversationId,
+    pub body: String,
+    /// Local wall-clock time, as the server sent it.
+    pub time: NaiveDateTime,
+}
+
+impl StreamChat {
+    /// True when this is the echo of a message this client sent.
+    pub fn is_mine(&self, me: Option<i32>) -> bool {
+        me.is_some_and(|uid| uid == self.from_uid)
+    }
+
+    /// The conversation the message belongs to, from this client's point of
+    /// view. A message I sent belongs to whoever I addressed; an incoming group
+    /// message belongs to the group, not to the sender's direct conversation.
+    pub fn conversation(&self, me: Option<i32>) -> ConversationId {
+        match self.target {
+            ConversationId::Group(_) => self.target,
+            ConversationId::User(target) if self.is_mine(me) => ConversationId::User(target),
+            ConversationId::User(_) => ConversationId::User(self.from_uid),
+        }
+    }
+
+    /// Turn the event into the one message type the rest of the client knows.
+    pub fn into_message(self, from_name: String) -> Message {
+        Message {
+            mid: self.mid,
+            from_uid: self.from_uid,
+            from_name,
+            body: self.body,
+            time: self.time,
+        }
+    }
+}
+
+/// What one named event from the stream means to this client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamEvent {
+    Chat(StreamChat),
+    /// Liveness only. Never a message.
+    Heartbeat,
+}
+
+/// The server's `ChatMessage`, field-for-field (`src/message.rs`).
+#[derive(Debug, Deserialize)]
+struct WireChatMessage {
+    mid: i64,
+    payload: WireChatPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireChatPayload {
+    from_uid: i32,
+    created_at: String,
+    target: WireMessageTarget,
+    detail: WireMessageDetail,
+}
+
+/// `MessageTarget` is externally tagged: `{"User":{"uid":2}}`.
+#[derive(Debug, Deserialize)]
+enum WireMessageTarget {
+    User { uid: i32 },
+    Group { gid: i32 },
+}
+
+/// `MessageDetail` is externally tagged too. `Replay` is never constructed by
+/// the current server, but accepting it costs nothing and keeps an unknown
+/// message from killing the stream.
+#[derive(Debug, Deserialize)]
+enum WireMessageDetail {
+    Normal(WireMessageNormal),
+    Replay { content: WireMessageContent },
+}
+
+#[derive(Debug, Deserialize)]
+struct WireMessageNormal {
+    content: WireMessageContent,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireMessageContent {
+    content: String,
+}
+
+/// Translate one dispatched stream frame. Unknown event names return `Ok(None)`
+/// so a server-side addition is ignored instead of treated as a failure.
+pub fn stream_event(event: &str, data: &str) -> Result<Option<StreamEvent>, WireError> {
+    match event {
+        "Chat" => {
+            let wire: WireChatMessage =
+                serde_json::from_str(data).map_err(|e| WireError::Stream(format!("Chat: {e}")))?;
+            Ok(Some(StreamEvent::Chat(wire.into_domain()?)))
+        }
+        "Heartbeat" => Ok(Some(StreamEvent::Heartbeat)),
+        _ => Ok(None),
+    }
+}
+
+impl WireChatMessage {
+    fn into_domain(self) -> Result<StreamChat, WireError> {
+        let WireChatPayload {
+            from_uid,
+            created_at,
+            target,
+            detail,
+        } = self.payload;
+        let body = match detail {
+            WireMessageDetail::Normal(normal) => normal.content.content,
+            WireMessageDetail::Replay { content } => content.content,
+        };
+        let target = match target {
+            WireMessageTarget::User { uid } => ConversationId::User(uid),
+            WireMessageTarget::Group { gid } => ConversationId::Group(gid),
+        };
+        Ok(StreamChat {
+            mid: self.mid,
+            from_uid,
+            target,
+            body,
+            time: parse_wire_time(&created_at)?,
+        })
+    }
+}
+
+/// Translate `GET /user/detail/{uid}` (`src/user.rs::UserDetail`). Only id and
+/// name matter here; the rest of the payload is deliberately ignored.
+pub fn user_detail_from_json(body: &[u8]) -> Result<FoundUser, WireError> {
+    let row: WireIdName =
+        serde_json::from_slice(body).map_err(|e| WireError::FriendJson(e.to_string()))?;
+    Ok(FoundUser {
+        id: row.id,
+        name: row.name,
+    })
 }
