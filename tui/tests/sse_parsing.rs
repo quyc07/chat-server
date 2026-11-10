@@ -25,12 +25,15 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 /// `payload.target` and `payload.detail` externally tagged and the text nested
 /// under `detail.Normal.content.content`.
 ///
-/// This is a hand-copied-but-verified fixture (it also matches a capture from
-/// the running server). Generating it from `chat_server::event::Message` would
-/// need a dev-dependency on the server crate, which would drag that whole crate
-/// into `cargo clippy -p chat-tui --all-targets -- -D warnings` and turn its
-/// pre-existing warnings into failures. The regression test below still fails
-/// for the unwrapped `{mid, payload}` shape this replaced.
+/// This is a hand-copied-but-verified fixture: it matches a capture taken from
+/// the running server, and the frame shape is documented by `Message` and
+/// `event_handler` in `src/event.rs` plus the consumer in `assets/index.html`.
+/// Generating it from `chat_server::event::Message` would couple this crate's
+/// tests to the server crate and slow the test build for one string; the risk
+/// that a copied fixture drifts is instead covered by asserting against the
+/// live capture in `a_captured_chat_frame_decodes_through_its_enum_envelope`.
+/// The regression tests below still fail for the unwrapped `{mid, payload}`
+/// shape this replaced.
 const CHAT_DATA: &str = r#"{"ChatMessage":{"mid":42,"payload":{"from_uid":2,"created_at":"2026-11-11 09:00:00","target":{"User":{"uid":1}},"detail":{"Normal":{"content":{"content":"早上好"}}}}}}"#;
 
 /// My own echo, in the same envelope.

@@ -4,10 +4,10 @@
 
 **Blocked by:** 03 打开会话 + 历史消息流
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 输入内容后按 Enter 发送，消息立刻以 pending 状态出现在消息流
-- [ ] 发送成功后 pending 转为 confirmed，且不出现重复条目
-- [ ] 发送失败时输入内容保留在输入框，状态行显示服务端错误，pending 项标记为失败
-- [ ] 空输入按 Enter 不发送
-- [ ] 输入框支持退格编辑和中文输入
+- [x] 输入内容后按 Enter 发送，消息立刻以 pending 状态出现在消息流
+- [x] 发送成功后 pending 转为 confirmed，且不出现重复条目
+- [x] 发送失败时输入内容保留在输入框，状态行显示服务端错误，pending 项标记为失败
+- [x] 空输入按 Enter 不发送
+- [x] 输入框支持退格编辑和中文输入
