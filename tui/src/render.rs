@@ -4,18 +4,22 @@
 //! rows, which labels, and which layout mode all come from [`crate::state`].
 //! Every area is checked before use and every string is clipped by ratatui, so a
 //! tiny or zero-sized terminal degrades instead of panicking.
+//!
+//! Colour, glyphs, and weights come from [`crate::theme`] and nowhere else, so a
+//! palette change is one file rather than a hunt through this one.
 
 use chrono::Local;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::model::MessageView;
 use crate::state::{
     Connection, Focus, FriendsFocus, LayoutMode, LoginMode, Notice, RowView, Screen, State,
 };
+use crate::theme;
 
 pub fn draw(frame: &mut Frame, state: &State) {
     let area = frame.area();
@@ -38,15 +42,73 @@ pub fn draw(frame: &mut Frame, state: &State) {
     draw_status(frame, status, state);
 }
 
+/// A panel edge: rounded when it has focus, dim when it does not.
+fn panel(title: &str, focused: bool) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(if focused {
+            theme::focused_border()
+        } else {
+            theme::border()
+        })
+        .title(Span::styled(
+            format!(" {title} "),
+            if focused {
+                theme::accent_bold()
+            } else {
+                theme::muted()
+            },
+        ))
+}
+
+/// Put `right` against the panel's right edge, padding the gap by display width
+/// so CJK text on the left cannot push the time out of place.
+fn right_aligned(line: Line<'static>, right: &str, width: u16) -> Line<'static> {
+    right_aligned_spans(
+        line,
+        vec![Span::styled(right.to_string(), theme::muted())],
+        width,
+    )
+}
+
+/// Same, for a styled right-hand side (an unread count followed by a time).
+fn right_aligned_spans(
+    mut line: Line<'static>,
+    right: Vec<Span<'static>>,
+    width: u16,
+) -> Line<'static> {
+    if width == 0 || right.is_empty() {
+        return line;
+    }
+    let used = line.width();
+    let right_width: usize = right.iter().map(|span| span.width()).sum();
+    let gap = (width as usize).saturating_sub(used + right_width);
+    line.spans.push(Span::raw(" ".repeat(gap)));
+    line.spans.extend(right);
+    line
+}
+
 fn draw_minimal(frame: &mut Frame, area: Rect, state: &State) {
     let status = state
         .status_line()
         .unwrap_or_else(|| status_text(state).to_string());
-    let text = format!(
-        "窗口太小 ({}x{})，请放大终端 · {status}",
-        area.width, area.height
+    let lines = vec![
+        Line::from(Span::styled("窗口太小", theme::title())),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("{}×{}，请放大终端", area.width, area.height),
+            theme::muted(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(status, theme::muted())),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true }),
+        area,
     );
-    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), area);
 }
 
 fn draw_login(frame: &mut Frame, area: Rect, state: &State) {
@@ -57,20 +119,33 @@ fn draw_login(frame: &mut Frame, area: Rect, state: &State) {
         LoginMode::Login => "登录",
         LoginMode::Register => "注册",
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" chat-tui · {mode} "));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+
+    // A centred card reads as a dialog rather than a page of fields.
+    let card_width = area.width.min(52);
+    let card_height = area.height.min(10);
+    let card = Rect {
+        x: area.x + (area.width - card_width) / 2,
+        y: area.y + (area.height.saturating_sub(card_height)) / 2,
+        width: card_width,
+        height: card_height,
+    };
+
+    let block = panel(&format!("chat-tui · {mode}"), true);
+    let inner = block.inner(card);
+    frame.render_widget(block, card);
     if inner.height == 0 || inner.width == 0 {
         return;
     }
-
-    let viewport_hint = if state.viewport.width < 50 {
-        "Tab 切换字段 · Ctrl-R 切换登录/注册 · Enter 提交"
-    } else {
-        "Tab/↑↓ 切换字段 · Ctrl-R/F2 切换登录/注册 · Enter 提交 · Ctrl-C 退出"
+    let inner = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(2),
+        height: inner.height,
     };
+    if inner.width == 0 {
+        return;
+    }
+
     let mut lines = vec![
         Line::from(""),
         field_line("用户名", &state.form.name, state.form.focus == Focus::Name),
@@ -80,39 +155,41 @@ fn draw_login(frame: &mut Frame, area: Rect, state: &State) {
             state.form.focus == Focus::Password,
         ),
         Line::from(""),
-        Line::from(Span::styled(
-            format!("当前模式：{mode}（Ctrl-R 切换）"),
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            viewport_hint,
-            Style::default().fg(Color::DarkGray),
-        )),
     ];
     if state.form.busy {
-        lines.push(Line::from(Span::styled(
-            "正在提交…",
-            Style::default().fg(Color::Yellow),
-        )));
+        lines.push(Line::from(Span::styled("正在提交…", theme::accent())));
+        lines.push(Line::from(""));
     }
+    lines.push(Line::from(Span::styled(
+        "Tab 切换 · Ctrl-R 切换模式 · Enter 提交",
+        theme::muted(),
+    )));
+
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn field_line(label: &str, value: &str, focused: bool) -> Line<'static> {
-    let marker = if focused { "❯" } else { " " };
-    let style = if focused {
-        Style::default().fg(Color::Cyan)
+    let (marker, style) = if focused {
+        (theme::PROMPT, theme::accent())
     } else {
-        Style::default()
+        (" ", Style::default())
     };
-    Line::from(vec![
-        Span::styled(marker.to_string(), style),
-        Span::raw(" "),
-        Span::styled(format!("{label} "), style.add_modifier(Modifier::BOLD)),
+    let mut spans = vec![
+        Span::styled(format!("{marker} "), style),
+        Span::styled(
+            format!("{label} "),
+            if focused {
+                theme::accent_bold()
+            } else {
+                theme::muted()
+            },
+        ),
         Span::styled(value.to_string(), style),
-        Span::styled(if focused { "▏" } else { "" }, style),
-    ])
+    ];
+    if focused {
+        spans.push(Span::styled(theme::CURSOR, style));
+    }
+    Line::from(spans)
 }
 
 fn draw_conversations(frame: &mut Frame, area: Rect, state: &State) {
@@ -128,6 +205,7 @@ fn draw_conversations(frame: &mut Frame, area: Rect, state: &State) {
     let header = chunks[0];
     let body = chunks[1];
     let input = chunks[2];
+
     draw_conversations_header(frame, header, state);
     draw_conversations_message_input(frame, input, state);
     if body.height == 0 || body.width == 0 {
@@ -136,15 +214,22 @@ fn draw_conversations(frame: &mut Frame, area: Rect, state: &State) {
     let (list_area, messages_area) = match state.layout_mode() {
         // Too little width for two columns: stack the panes instead.
         LayoutMode::Compact => {
-            let rows = Layout::vertical([Constraint::Percentage(45), Constraint::Percentage(55)])
-                .split(body);
-            (rows[0], rows[1])
+            let rows = Layout::vertical([
+                Constraint::Percentage(45),
+                Constraint::Length(1),
+                Constraint::Percentage(55),
+            ])
+            .split(body);
+            (rows[0], rows[2])
         }
         _ => {
-            let columns =
-                Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
-                    .split(body);
-            (columns[0], columns[1])
+            let columns = Layout::horizontal([
+                Constraint::Percentage(34),
+                Constraint::Length(1),
+                Constraint::Percentage(66),
+            ])
+            .split(body);
+            (columns[0], columns[2])
         }
     };
     draw_conversation_list(frame, list_area, state);
@@ -160,36 +245,37 @@ fn draw_conversations_header(frame: &mut Frame, area: Rect, state: &State) {
         return;
     }
     let who = state.user_name().unwrap_or("?");
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("会话", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("  "),
-            Span::styled(who.to_string(), Style::default().fg(Color::DarkGray)),
-            Span::raw("   "),
-            Span::styled(
-                "↑/↓ 选择 · Enter 发送 · /open 名字 开始会话 · Ctrl-R 重新加载 · PgUp/PgDn 滚动 · Ctrl-F 好友 · Esc 退出",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ])),
-        area,
+    let hints = if area.width >= 100 {
+        "↑↓ 选择 · Enter 发送 · /open 名字 · Ctrl-F 好友 · Esc 退出"
+    } else if area.width >= 60 {
+        "↑↓ 选择 · Enter 发送 · /open · Esc 退出"
+    } else {
+        "↑↓ · Enter · Esc"
+    };
+    let line = right_aligned(
+        Line::from(vec![
+            Span::styled("chat-tui", theme::accent_bold()),
+            Span::raw(" "),
+            Span::styled(who.to_string(), theme::muted()),
+        ]),
+        hints,
+        area.width,
     );
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_conversations_message_input(frame: &mut Frame, area: Rect, state: &State) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let cursor = Style::default().fg(Color::Cyan);
     let mut spans = vec![
-        Span::styled("❯ ", cursor),
-        Span::styled(state.input.clone(), cursor),
-        Span::styled("▏", cursor),
+        Span::styled(format!("{} ", theme::PROMPT), theme::accent()),
+        Span::raw(state.input.clone()),
     ];
     if state.input.is_empty() {
-        spans.push(Span::styled(
-            " 输入消息，Enter 发送",
-            Style::default().fg(Color::DarkGray),
-        ));
+        spans.push(Span::styled("输入消息，Enter 发送", theme::muted()));
+    } else {
+        spans.push(Span::styled(theme::CURSOR, theme::accent()));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -198,7 +284,9 @@ fn draw_conversation_list(frame: &mut Frame, area: Rect, state: &State) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let block = Block::default().borders(Borders::ALL).title(" 会话 ");
+    // One accent edge per screen: the conversation list is what the keyboard
+    // drives, so it carries the accent and the message pane stays quiet.
+    let block = panel("会话", true);
     let list_area = block.inner(area);
     frame.render_widget(block, area);
     if list_area.height == 0 || list_area.width == 0 {
@@ -208,23 +296,69 @@ fn draw_conversation_list(frame: &mut Frame, area: Rect, state: &State) {
         let hint = if state.loading {
             "加载会话中…"
         } else {
-            "暂无会话"
+            "还没有会话\n\n用 /open 用户名 开始一段对话"
         };
         frame.render_widget(
-            Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(hint)
+                .style(theme::muted())
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true }),
             list_area,
         );
         return;
     }
 
     let now = Local::now().naive_local();
-    let compact = state.layout_mode() == LayoutMode::Compact;
+    // Two lines per conversation reads better than one crowded line, but only
+    // when there is width to spare.
+    let two_line = list_area.width >= 24 && list_area.height >= 6;
+    let show_time = list_area.width >= 22;
     let items: Vec<ListItem> = state
         .conversations
         .iter()
-        .map(|conversation| ListItem::new(row_line(conversation.row_view(now), compact)))
+        .map(|conversation| {
+            ListItem::new(row_lines(
+                conversation.row_view(now),
+                two_line,
+                show_time,
+                list_area.width,
+            ))
+        })
         .collect();
     render_selectable_list(frame, list_area, items, state.highlighted_index());
+}
+
+fn row_lines(row: RowView, two_line: bool, show_time: bool, width: u16) -> Vec<Line<'static>> {
+    // Three unread states, one glyph column: filled count, hollow never-read,
+    // and a dim tick for read. Nothing else competes for the gutter.
+    let (glyph, dot_style) = match row.unread_badge.as_deref() {
+        Some("●") => (theme::DOT_UNREAD_ALL, theme::accent()),
+        Some(_) => (theme::DOT_UNREAD, theme::accent()),
+        None => (theme::DOT_READ, theme::muted()),
+    };
+    let head = Line::from(vec![
+        Span::styled(glyph, dot_style),
+        Span::raw(" "),
+        Span::styled(row.title, theme::title()),
+    ]);
+    let mut tail = Vec::new();
+    // The hollow glyph already says "never read", so only a real count goes on
+    // the right.
+    if let Some(badge) = row.unread_badge.clone().filter(|badge| badge != "●") {
+        tail.push(Span::styled(badge, theme::accent_bold()));
+        tail.push(Span::raw("  "));
+    }
+    if show_time {
+        tail.push(Span::styled(row.time_label.clone(), theme::muted()));
+    }
+    let head = right_aligned_spans(head, tail, width);
+    if !two_line {
+        return vec![head];
+    }
+    vec![
+        head,
+        Line::from(Span::styled(format!("  {}", row.preview), theme::muted())),
+    ]
 }
 
 /// Several `/open` matches: the user picks one. It takes the message pane's
@@ -234,7 +368,7 @@ fn draw_open_picker(frame: &mut Frame, area: Rect, state: &State) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let block = list_block(&format!("选择用户 · /open {}", state.open.query), true);
+    let block = panel(&format!("选择用户 · /open {}", state.open.query), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 || inner.width == 0 {
@@ -243,8 +377,8 @@ fn draw_open_picker(frame: &mut Frame, area: Rect, state: &State) {
     let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "↑/↓ 选择 · Enter 打开 · Esc 取消",
-            Style::default().fg(Color::DarkGray),
+            "↑↓ 选择 · Enter 打开 · Esc 取消",
+            theme::muted(),
         ))),
         chunks[0],
     );
@@ -265,10 +399,10 @@ fn draw_message_pane(frame: &mut Frame, area: Rect, state: &State) {
         return;
     }
     let title = match state.active_title() {
-        Some(title) => format!(" {title} "),
-        None => " 消息 ".to_string(),
+        Some(title) => title,
+        None => "消息".to_string(),
     };
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let block = panel(&title, false);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 || inner.width == 0 {
@@ -283,20 +417,32 @@ fn draw_message_pane(frame: &mut Frame, area: Rect, state: &State) {
         } else if state.active.is_some() {
             // An empty conversation opened with /open is ready for its first
             // message; say so instead of looking broken.
-            "暂无消息，输入第一条消息吧"
+            "还没有消息\n\n在下面输入，Enter 发送"
         } else {
-            "从左侧选择一位好友"
+            "从左侧选择一位对话"
         };
         frame.render_widget(
-            Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(hint)
+                .style(theme::muted())
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true }),
             inner,
         );
         return;
     }
 
-    let mut lines = Vec::with_capacity(views.len() * 3);
+    let mut lines = Vec::with_capacity(views.len() * 2);
+    let mut previous: Option<(bool, String)> = None;
     for view in views {
-        lines.extend(message_lines(view));
+        let sender_key = (view.mine, view.sender.clone());
+        let grouped = previous.as_ref() == Some(&sender_key);
+        // A blank line separates speakers; a burst from one speaker reads as a
+        // block with no repeated name.
+        if previous.is_some() && !grouped {
+            lines.push(Line::from(""));
+        }
+        lines.extend(message_lines(view, grouped, inner.width));
+        previous = Some(sender_key);
     }
     // The paragraph wraps every line (CJK included) to the pane width. The state
     // machine only says how many lines to scroll up from the newest message;
@@ -309,65 +455,39 @@ fn draw_message_pane(frame: &mut Frame, area: Rect, state: &State) {
     frame.render_widget(paragraph.scroll((top, 0)), inner);
 }
 
-/// One message as a header line (who + time) and one or more body lines. The
-/// body is handed to the paragraph unwrapped; the paragraph does the width-aware
-/// wrapping so no column is ever overflowed.
-fn message_lines(view: MessageView) -> Vec<Line<'static>> {
-    let (who, who_style, body_style) = if view.mine {
-        (
-            "我".to_string(),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::Cyan),
-        )
+/// One message: a header naming the sender with a right-aligned time, then the
+/// body indented under it. Consecutive messages from the same sender drop the
+/// header, so a burst of messages reads as a block instead of a stack of
+/// repeated names.
+fn message_lines(view: MessageView, grouped: bool, width: u16) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if !grouped {
+        let who = if view.mine {
+            "我".to_string()
+        } else {
+            view.sender
+        };
+        let who_style = if view.mine {
+            theme::accent_bold()
+        } else {
+            theme::title()
+        };
+        let head = Line::from(vec![Span::styled(who, who_style)]);
+        let head = right_aligned(head, &view.time_label, width);
+        lines.push(head);
+    }
+    let body_style = if view.failed {
+        Style::default().fg(theme::danger())
     } else {
-        (
-            view.sender,
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-            Style::default(),
-        )
+        Style::default()
     };
-    let label_style = if view.failed {
-        Style::default().fg(Color::Red)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let mut lines = vec![Line::from(vec![
-        Span::styled(format!("{who} "), who_style),
-        Span::styled(view.time_label, label_style),
-    ])];
     for row in view.body.split('\n') {
         lines.push(Line::from(Span::styled(format!("  {row}"), body_style)));
     }
-    lines.push(Line::from(""));
-    lines
-}
-
-fn row_line(row: RowView, compact: bool) -> Line<'static> {
-    let has_badge = row.unread_badge.is_some();
-    let badge = row.unread_badge.unwrap_or_else(|| " ".to_string());
-    let badge_style = if has_badge {
-        Style::default().fg(Color::Red)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let mut spans = vec![
-        Span::styled(format!("{badge:>2} "), badge_style),
-        Span::styled(row.title, Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw("  "),
-        Span::styled(row.preview, Style::default().fg(Color::Gray)),
-    ];
-    if !compact {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            row.time_label,
-            Style::default().fg(Color::DarkGray),
-        ));
+    if view.failed {
+        lines.push(Line::from(Span::styled("  · 发送失败", theme::muted())));
     }
-    Line::from(spans)
+    lines
 }
 
 fn draw_friends(frame: &mut Frame, area: Rect, state: &State) {
@@ -384,38 +504,49 @@ fn draw_friends(frame: &mut Frame, area: Rect, state: &State) {
     .split(area);
 
     let who = state.user_name().unwrap_or("?");
+    let hints = "Tab 切换 · Enter 搜索/发送/通过 · r 拒绝 · Esc 返回";
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("好友", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("  "),
-            Span::styled(who.to_string(), Style::default().fg(Color::DarkGray)),
-            Span::raw("   "),
-            Span::styled(
-                "Tab 切换 · Enter 搜索/发送/通过 · r 拒绝 · Esc 返回",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ])),
+        Paragraph::new(right_aligned(
+            Line::from(vec![
+                Span::styled("好友", theme::accent_bold()),
+                Span::raw(" "),
+                Span::styled(who.to_string(), theme::muted()),
+            ]),
+            hints,
+            area.width,
+        )),
         chunks[0],
     );
 
     let search_focused = state.friends.focus == FriendsFocus::Search;
     let search_style = if search_focused {
-        Style::default().fg(Color::Cyan)
+        theme::accent()
     } else {
         Style::default()
     };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(if search_focused { "❯" } else { " " }, search_style),
-            Span::raw(" 搜索 "),
-            Span::styled(
-                state.friends.query.clone(),
-                search_style.add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(if search_focused { "▏" } else { "" }, search_style),
-        ])),
-        chunks[1],
-    );
+    let mut search = vec![
+        Span::styled(
+            if search_focused { theme::PROMPT } else { " " },
+            search_style,
+        ),
+        Span::raw(" "),
+        Span::styled(
+            if state.friends.query.is_empty() {
+                "搜索用户名".to_string()
+            } else {
+                state.friends.query.clone()
+            },
+            if state.friends.query.is_empty() || !search_focused {
+                theme::muted()
+            } else {
+                search_style
+            },
+        ),
+    ];
+    if search_focused {
+        search.push(Span::styled(theme::CURSOR, search_style));
+    }
+    frame.render_widget(Paragraph::new(Line::from(search)), chunks[1]);
 
     let now = Local::now().naive_local();
     let results: Vec<ListItem> = state
@@ -462,7 +593,7 @@ fn draw_friends(frame: &mut Frame, area: Rect, state: &State) {
     draw_friend_list(
         frame,
         chunks[3],
-        "待处理请求 · Enter 通过 · r 拒绝",
+        "待处理请求",
         state.friends.focus == FriendsFocus::Requests,
         requests,
         state.friends.selected_request,
@@ -478,7 +609,7 @@ fn draw_friends(frame: &mut Frame, area: Rect, state: &State) {
     let friend_hint = if state.friends.loading_friends {
         "加载中…"
     } else {
-        "还没有好友，先搜索并发送请求"
+        "还没有好友\n\n在上面搜索并发送请求"
     };
     draw_friend_list(
         frame,
@@ -503,7 +634,7 @@ fn draw_friend_list(
     if area.height == 0 || area.width == 0 {
         return;
     }
-    let block = list_block(title, focused);
+    let block = panel(title, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 || inner.width == 0 {
@@ -511,25 +642,15 @@ fn draw_friend_list(
     }
     if items.is_empty() {
         frame.render_widget(
-            Paragraph::new(empty_hint).style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(empty_hint)
+                .style(theme::muted())
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true }),
             inner,
         );
         return;
     }
     render_selectable_list(frame, inner, items, Some(selected));
-}
-
-/// A bordered panel that highlights its focused state, shared by the `/open`
-/// chooser and the friends lists.
-fn list_block(title: &str, focused: bool) -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_style(if focused {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        })
-        .title(format!(" {title} "))
 }
 
 /// The one selectable-list body: reversed highlight, blank symbol, clamped
@@ -546,7 +667,7 @@ fn render_selectable_list(
     }
     let len = items.len();
     let list = List::new(items)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_style(theme::selected())
         .highlight_symbol("");
     let mut list_state = ListState::default();
     list_state.select(selected.map(|index| index.min(len - 1)));
@@ -558,24 +679,34 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &State) {
         return;
     }
     if state.screen == Screen::Friends {
-        let (text, style) = friends_status(state);
-        frame.render_widget(Paragraph::new(text).style(style), area);
+        let (text, colour) = friends_status(state);
+        render_status(frame, area, colour, &text);
         return;
     }
-    let (text, style) = match state.status_line() {
+    let (text, colour) = match state.status_line() {
         // A down push link is a warning, not a failed request; the ordinary
         // status text, if any, is appended to it by the state machine.
-        Some(message) if state.connection == Connection::Down => {
-            (message, Style::default().fg(Color::Yellow))
-        }
-        Some(message) => (message, Style::default().fg(Color::Red)),
-        None if state.loading => ("加载中…".to_string(), Style::default().fg(Color::DarkGray)),
-        None => (
-            status_text(state).to_string(),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Some(message) if state.connection == Connection::Down => (message, theme::warning()),
+        Some(message) => (message, theme::danger()),
+        None if state.loading => ("加载中…".to_string(), theme::warning()),
+        None => (status_text(state).to_string(), theme::ACCENT),
     };
-    frame.render_widget(Paragraph::new(text).style(style), area);
+    render_status(frame, area, colour, &text);
+}
+
+/// A state dot plus its text: the dot carries the colour, the sentence carries
+/// the meaning, so the state never depends on colour alone.
+fn render_status(frame: &mut Frame, area: Rect, colour: Color, text: &str) {
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!("{} ", theme::DOT_UNREAD),
+                Style::default().fg(colour),
+            ),
+            Span::styled(text.to_string(), theme::muted()),
+        ])),
+        area,
+    );
 }
 
 fn status_text(state: &State) -> &'static str {
@@ -588,17 +719,16 @@ fn status_text(state: &State) -> &'static str {
 
 /// Info notices (already a friend, request already waiting, forbidden) are not
 /// failures, so they must not borrow the error colour.
-fn friends_status(state: &State) -> (String, Style) {
+fn friends_status(state: &State) -> (String, Color) {
     match &state.friends.notice {
-        Some(Notice::Info(message)) => (message.clone(), Style::default().fg(Color::Green)),
-        Some(Notice::Error(message)) => (message.clone(), Style::default().fg(Color::Red)),
-        None if state.friends.loading_requests || state.friends.loading_friends => (
-            "正在加载好友数据…".to_string(),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Some(Notice::Info(message)) => (message.clone(), theme::success()),
+        Some(Notice::Error(message)) => (message.clone(), theme::danger()),
+        None if state.friends.loading_requests || state.friends.loading_friends => {
+            ("正在加载好友数据…".to_string(), theme::warning())
+        }
         None => (
             "搜索用户，或处理待处理的好友请求".to_string(),
-            Style::default().fg(Color::DarkGray),
+            theme::ACCENT,
         ),
     }
 }

@@ -21,3 +21,5 @@ pub mod model;
 pub mod render;
 pub mod sse;
 pub mod state;
+
+pub mod theme;
