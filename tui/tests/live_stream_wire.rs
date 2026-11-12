@@ -8,7 +8,7 @@
 use chat_tui::api::{ApiClient, ApiError};
 use chat_tui::model::{self, ConversationId, FoundUser, StreamEvent};
 use chat_tui::sse::{Frame, Parser};
-use wiremock::matchers::{header, method, path, query_param};
+use wiremock::matchers::{header, header_exists, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// The exact `data:` shape the server writes. `src/event.rs::event_handler`
@@ -168,4 +168,31 @@ async fn a_401_on_user_detail_is_classified_so_the_wiring_can_reauthenticate() {
         api.user_detail(2).await.expect_err("token is rejected"),
         ApiError::Unauthorized("无效的Token".to_string())
     );
+}
+
+/// The server's stream handler declares `User-Agent` as a **required** header
+/// extractor, so a request without one is rejected with 400 before it ever
+/// becomes a stream — and `reqwest` sends no `User-Agent` by default.
+///
+/// Without the header the push link can never connect, so every live message is
+/// missed; the recipient only sees it after logging out and back in, because
+/// that refetches history. This test pins the header: the stub answers 404
+/// unless the request carries one, which surfaces to the client exactly as the
+/// real server's 400 does.
+#[tokio::test]
+async fn the_stream_request_sends_a_user_agent_because_the_server_requires_one() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/event/stream"))
+        .and(query_param("token", "tok-1"))
+        .and(header_exists("user-agent"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(""))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let api = ApiClient::new(server.uri());
+    let response = api.open_stream("tok-1").await.expect("stream opens");
+    assert_eq!(response.status(), 200);
+    server.verify().await;
 }

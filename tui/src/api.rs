@@ -18,6 +18,14 @@ use crate::model::{
 /// How long a request may take before the UI reports the server unreachable.
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Sent on every request, including the push link.
+///
+/// The server's stream handler declares `User-Agent` as a *required* header
+/// extractor, so a request without one is rejected with 400 before it ever
+/// becomes a stream. `reqwest` sends no `User-Agent` by default, which is why
+/// this has to be set explicitly rather than relying on a default.
+const USER_AGENT: &str = concat!("chat-tui/", env!("CARGO_PKG_VERSION"));
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ApiError {
     /// The server could not be reached at all (connect error, timeout, DNS...).
@@ -80,10 +88,12 @@ impl ApiClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         let http = Client::builder()
+            .user_agent(USER_AGENT)
             .timeout(REQUEST_TIMEOUT)
             .build()
             .expect("reqwest client configuration is valid");
         let stream_http = Client::builder()
+            .user_agent(USER_AGENT)
             .connect_timeout(REQUEST_TIMEOUT)
             .build()
             .expect("reqwest client configuration is valid");
