@@ -15,3 +15,6 @@ data
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 .DS_Store
+
+# Local secrets. Copy .env.example to .env and fill it in; never commit the result.
+.env
