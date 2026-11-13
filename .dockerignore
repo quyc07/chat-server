@@ -1,3 +1,13 @@
-logs
+# Local caches and machine state: never send them to the daemon.
+.git
+.cargo-home
+.idea
+.scratch
+.DS_Store
 data
+logs
 target
+volume
+
+# Local secrets. compose reads .env; the image must not carry it.
+.env
