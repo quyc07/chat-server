@@ -1,9 +1,9 @@
-use crate::app_state::AppState;
-use crate::user::{get_by_id, UserErr};
 use crate::Res;
+use crate::app_state::AppState;
+use crate::user::{UserErr, get_by_id};
 use entity::friend_ship;
 use entity::prelude::FriendShip;
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use migration::Condition;
 use sea_orm::QueryFilter;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, Set};
@@ -101,20 +101,28 @@ pub struct Loc {
     pub coordinates: Vec<f64>,
 }
 
+/// 地理围栏功能尚未实现（见下方 `todo!()`），先把类型占位保留。
+#[allow(dead_code)]
 pub(crate) struct Point {
     pub long: f64,
     pub lat: f64,
 }
+/// 同上：`Polygon` / `MultiPolygon` 待实现。
+#[allow(dead_code)]
 pub(crate) enum Location {
     Point(Point),
     Polygon(Vec<Point>),
     MultiPolygon(Vec<Vec<Point>>),
 }
 
-pub(crate) async fn set_loc(app_state: &AppState, uid: i32, loc: Location) -> Res<()> {
+pub(crate) async fn set_loc(_app_state: &AppState, _uid: i32, _loc: Location) -> Res<()> {
     todo!()
 }
 
-pub(crate) async fn nearby(app_state: &AppState, loc: Location, radius: i32) -> Res<Vec<FriendVo>> {
+pub(crate) async fn nearby(
+    _app_state: &AppState,
+    _loc: Location,
+    _radius: i32,
+) -> Res<Vec<FriendVo>> {
     todo!()
 }

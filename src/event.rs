@@ -9,13 +9,13 @@ use std::time::Duration;
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::message::ChatMessage;
-use crate::{middleware, Api};
-use axum::extract::State;
-use axum::response::sse::Event;
-use axum::response::Sse;
-use axum::routing::get;
+use crate::{Api, middleware};
 use axum::Router;
-use axum_extra::{headers, TypedHeader};
+use axum::extract::State;
+use axum::response::Sse;
+use axum::response::sse::Event;
+use axum::routing::get;
+use axum_extra::{TypedHeader, headers};
 use chrono::{DateTime, Local};
 use futures::Stream;
 use serde::Serialize;
@@ -46,9 +46,15 @@ impl Api for EventApi {
 async fn event_handler(
     State(app_state): State<AppState>,
     token: Token, // sse无法通过header传递，需要通过query传递，需提供一个从query解析的QueryToken同该接口使用
-    TypedHeader(user_agent): TypedHeader<headers::UserAgent>,
+    // 可选：User-Agent 不是 HTTP 必需头，缺失时不该拒绝连接。
+    // 声明成必需提取器时，任何不自带 UA 的客户端（例如 reqwest 默认）都会收到 400，
+    // 于是永远接不上推送，只能在重新登录拉历史时才看到消息。
+    user_agent: Option<TypedHeader<headers::UserAgent>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    println!("`{}` connected", user_agent.as_str());
+    let user_agent = user_agent
+        .map(|user_agent| user_agent.0.as_str().to_owned())
+        .unwrap_or_else(|| "<未提供 User-Agent>".to_owned());
+    println!("`{user_agent}` connected");
 
     // You can also create streams from tokio channels using the wrappers in
     // https://docs.rs/tokio-stream

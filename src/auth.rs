@@ -6,22 +6,21 @@ use std::time::Duration;
 use crate::app_state::AppState;
 use crate::err::{ErrPrint, ServerError};
 use crate::validate::ValidatedJson;
-use crate::{middleware, user, Api, Res};
+use crate::{Api, Res, middleware, user};
+use axum::RequestPartsExt;
 use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::routing::{delete, patch, post};
-use axum::RequestPartsExt;
 use axum::{Json, Router};
-use axum_extra::headers::authorization::Bearer;
-use axum_extra::headers::Authorization;
 use axum_extra::TypedHeader;
+use axum_extra::headers::Authorization;
+use axum_extra::headers::authorization::Bearer;
 use chrono::{DateTime, Local};
 use entity::sea_orm_active_enums::Role;
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, TokenData, Validation, decode, encode};
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::error;
 use validator::Validate;
 
 static KEYS: LazyLock<Keys, fn() -> Keys> = LazyLock::new(|| {
@@ -219,17 +218,37 @@ impl Keys {
     }
 }
 
+pub(crate) async fn delete_login_status(user_id: i32) {
+    LOGIN_USER.remove(&user_id).await;
+}
+
+pub(crate) async fn check_token_expire(token: Token) -> Result<(), AuthError> {
+    // 判断是否是已登陆用户，LOGIN_USER的内存过期时间与token的expire时间一致，因此只需判断是否存在即可
+    match LOGIN_USER.get(&token.id).await {
+        None => Err(AuthError::InvalidToken),
+        Some(_) => Ok(()),
+    }
+}
+
+pub(crate) async fn check_admin(token: Token) -> Result<bool, AuthError> {
+    match LOGIN_USER.get(&token.id).await {
+        None => Err(AuthError::InvalidToken),
+        Some(token) if token.role == Role::Admin => Ok(true),
+        _ => Ok(false),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::ops::Add;
     use std::thread::sleep;
     use std::time::Duration;
 
-    use crate::auth::{AuthError, Token, KEYS};
+    use crate::auth::{AuthError, KEYS, Token};
     use chrono::{DateTime, Local};
     use entity::sea_orm_active_enums::Role;
     use hmac::{Hmac, Mac};
-    use jsonwebtoken::{decode, encode, Header, Validation};
+    use jsonwebtoken::{Header, Validation, decode, encode};
     use jwt::{SignWithKey, VerifyWithKey};
     use serde::{Deserialize, Serialize};
     use sha2::Sha256;
@@ -308,25 +327,5 @@ mod test {
         let time = Local::now();
         println!("{}", time);
         println!("{:?}", time.timezone());
-    }
-}
-
-pub(crate) async fn delete_login_status(user_id: i32) {
-    LOGIN_USER.remove(&user_id).await;
-}
-
-pub(crate) async fn check_token_expire(token: Token) -> Result<(), AuthError> {
-    // 判断是否是已登陆用户，LOGIN_USER的内存过期时间与token的expire时间一致，因此只需判断是否存在即可
-    match LOGIN_USER.get(&token.id).await {
-        None => Err(AuthError::InvalidToken),
-        Some(_) => Ok(()),
-    }
-}
-
-pub(crate) async fn check_admin(token: Token) -> Result<bool, AuthError> {
-    match LOGIN_USER.get(&token.id).await {
-        None => Err(AuthError::InvalidToken),
-        Some(token) if token.role == Role::Admin => Ok(true),
-        _ => Ok(false),
     }
 }

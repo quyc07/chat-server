@@ -1,9 +1,9 @@
 FROM rust:alpine AS builder
-RUN apk add -q --no-cache build-base openssl-dev curl
+RUN apk add -q --no-cache build-base openssl-dev perl make
 ENV RUSTFLAGS="-C target-feature=-crt-static"
 WORKDIR /usr/src/chat-server
 COPY . .
-RUN cargo build --release
+RUN cargo build --release --locked --bin chat-server
 
 # 使用Alpine作为最终镜像
 FROM alpine:latest

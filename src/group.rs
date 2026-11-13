@@ -5,7 +5,6 @@ use axum::extract::{Path, State};
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Local};
-use futures::TryStreamExt;
 use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{
@@ -30,7 +29,7 @@ use crate::message::{
 use crate::read_index::UpdateReadIndex;
 use crate::user::UserErr;
 use crate::validate::ValidatedJson;
-use crate::{message, middleware, read_index, user, Api, Res};
+use crate::{Api, Res, message, middleware, read_index, user};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -145,25 +144,6 @@ async fn mine(State(app_state): State<AppState>, token: Token) -> Res<Json<Vec<G
         .all(&app_state.db)
         .await?;
     Ok(Json(groups.into_iter().map(GroupRes::from).collect()))
-}
-
-/// 采用stream操作可减少内存分配
-async fn mine_stream(State(app_state): State<AppState>, token: Token) -> Res<Vec<GroupRes>> {
-    let mut ugr_stream = UserGroupRel::find()
-        .filter(user_group_rel::Column::UserId.eq(token.id))
-        .stream(&app_state.db)
-        .await?;
-    let mut groups = Vec::new();
-    while let Some(ugr) = TryStreamExt::try_next(&mut ugr_stream).await? {
-        let option = Group::find()
-            .filter(group::Column::Id.eq(ugr.group_id))
-            .one(&app_state.db)
-            .await?;
-        if let Some(g) = option {
-            groups.push(g);
-        }
-    }
-    Ok(groups.into_iter().map(GroupRes::from).collect())
 }
 
 #[derive(Deserialize, Validate, ToSchema)]
@@ -477,14 +457,6 @@ async fn un_forbid(
             }
         }
     }
-}
-
-pub(crate) async fn get_user_by_gid(
-    app_state: AppState,
-    gid: i32,
-) -> Result<Vec<entity::user::Model>, DbErr> {
-    let uids = get_uids(&app_state, gid).await?;
-    user::get_by_ids(uids, &app_state).await
 }
 
 async fn send(

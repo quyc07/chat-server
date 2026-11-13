@@ -1,4 +1,4 @@
-workspace = { members = ["entity", "migration", "msg"] }
+workspace = { members = ["entity", "migration", "msg", "tui"] }
 [package]
 name = "chat-server"
 version = "0.1.1"
@@ -40,3 +40,8 @@ utoipa = { version = "5.3.1", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "9.0.0", features = ["axum"] }
 moka = { version = "0.12.8", features = ["future"] }
 openssl = { version = "0.10", features = ["vendored"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

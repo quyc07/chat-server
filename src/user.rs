@@ -8,12 +8,12 @@ use chrono::{DateTime, Local};
 use itertools::Itertools;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter, QuerySelect,
+    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
+    QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::error;
-use utoipa::{OpenApi, ToSchema};
+use utoipa::ToSchema;
 use validator::Validate;
 
 use crate::app_state::AppState;
@@ -28,8 +28,8 @@ use crate::message::{
 };
 use crate::read_index::UpdateReadIndex;
 use crate::validate::ValidatedJson;
-use crate::{auth, datetime, friend, group, message, middleware, PageReq, Res};
-use crate::{read_index, Api};
+use crate::{Api, read_index};
+use crate::{PageReq, Res, auth, datetime, friend, group, message, middleware};
 use entity::prelude::User;
 use entity::sea_orm_active_enums::UserStatus;
 use entity::user;
@@ -326,10 +326,10 @@ enum ChatVo {
 }
 
 impl ChatVo {
-    fn get_msg_time(&self) -> &DateTime<Local> {
+    fn get_mid(&self) -> i64 {
         match self {
-            ChatVo::User { msg_time, .. } => msg_time,
-            ChatVo::Group { msg_time, .. } => msg_time,
+            ChatVo::User { mid, .. } => *mid,
+            ChatVo::Group { mid, .. } => *mid,
         }
     }
 }
@@ -342,6 +342,8 @@ async fn history(
 ) -> Res<Json<Vec<ChatVo>>> {
     let ris = entity::read_index::Entity::find()
         .filter(entity::read_index::Column::Uid.eq(token.id))
+        .order_by_desc(entity::read_index::Column::LatestMid)
+        .order_by_desc(entity::read_index::Column::Id)
         .offset(page_req.offset())
         .limit(page_req.limit)
         .all(&app_state.db)
@@ -455,7 +457,9 @@ async fn history(
         .into_iter()
         .chain(chat_of_group)
         .collect::<Vec<ChatVo>>();
-    history.sort_by(|x1, x2| x2.get_msg_time().cmp(x1.get_msg_time()));
+    // The rows were already selected in recency order, but splitting them into
+    // user and group batches lost it; restore the same order for this page.
+    history.sort_by_key(|x| std::cmp::Reverse(x.get_mid()));
     Ok(Json(history))
 }
 
