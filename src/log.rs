@@ -1,20 +1,7 @@
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-
-async fn log_file() {
-    // 输出到文件
-    let debug_file = rolling::daily("./logs", "debug");
-    let warn_file = rolling::daily("./logs", "warn");
-    let all_logs = debug_file.and(warn_file.with_max_level(tracing::Level::WARN));
-    tracing_subscriber::fmt()
-        .with_writer(all_logs)
-        .with_max_level(tracing::Level::TRACE)
-        .with_ansi(false)
-        .init();
-}
 
 pub async fn log_init_multi() {
     let file_appender = rolling::daily("logs", "info.log");

@@ -1,7 +1,6 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 
 use sea_orm::{Database, DatabaseConnection};
 use tokio::sync::broadcast;
@@ -17,18 +16,6 @@ pub struct AppState {
     pub msg_db: Arc<Mutex<MsgDb>>,
     pub event_sender: Arc<broadcast::Sender<Arc<BroadcastEvent>>>,
 }
-
-static ENVS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
-    let string = fs::read_to_string(".env").unwrap();
-    let env = string.lines();
-    env.into_iter()
-        .map(|line| {
-            line.split_once("=")
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .unwrap()
-        })
-        .collect()
-});
 
 impl AppState {
     /// Open the application state using `data_dir` as the root for both the

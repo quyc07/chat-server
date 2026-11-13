@@ -7,7 +7,7 @@ use crate::datetime::datetime_format;
 use crate::err::ErrPrint;
 use crate::friend::friend_ship::{FriendVo, Location, Point};
 use crate::user::UserErr;
-use crate::{datetime, middleware, user, Api, Res};
+use crate::{Api, Res, datetime, middleware, user};
 use axum::extract::{Path, State};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
@@ -247,28 +247,28 @@ async fn nearby(
     token: Token,
     Path(radius): Path<i32>,
 ) -> Res<Json<Vec<FriendVo>>> {
-    if let Some(friends) = friend_ship::get_friends(&app_state, token.id).await? {
-        if let Some(loc) = friends.loc {
-            match loc.r#type.as_str() {
-                "Point" => {
-                    return Ok(Json(
-                        friend_ship::nearby(
-                            &app_state,
-                            Location::Point(Point {
-                                long: loc.coordinates[0],
-                                lat: loc.coordinates[1],
-                            }),
-                            radius,
-                        )
-                        .await?,
-                    ));
-                }
-                "Polygon" => {
-                    todo!("待实现区域");
-                }
-                "MultiPolygon" => {}
-                _ => {}
+    if let Some(friends) = friend_ship::get_friends(&app_state, token.id).await?
+        && let Some(loc) = friends.loc
+    {
+        match loc.r#type.as_str() {
+            "Point" => {
+                return Ok(Json(
+                    friend_ship::nearby(
+                        &app_state,
+                        Location::Point(Point {
+                            long: loc.coordinates[0],
+                            lat: loc.coordinates[1],
+                        }),
+                        radius,
+                    )
+                    .await?,
+                ));
             }
+            "Polygon" => {
+                todo!("待实现区域");
+            }
+            "MultiPolygon" => {}
+            _ => {}
         }
     }
     Ok(Json(vec![]))

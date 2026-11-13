@@ -1,14 +1,14 @@
 use crate::app_state::AppState;
 use crate::auth::Token;
 use crate::err::ServerError;
-use crate::{group, message, middleware, Api, Res};
+use crate::{Api, Res, group, message, middleware};
 use axum::extract::State;
 use axum::routing::put;
 use axum::{Json, Router};
 use entity::read_index;
 use entity::read_index::{ActiveModel, Model};
 use sea_orm::ActiveValue::Set;
-use sea_orm::{sea_query, DbErr, EntityTrait, NotSet};
+use sea_orm::{DbErr, EntityTrait, NotSet, sea_query};
 use serde::{Deserialize, Serialize};
 
 pub struct ReadIndexApi;

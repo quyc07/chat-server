@@ -65,22 +65,22 @@ impl PageReq {
 
 #[cfg(test)]
 mod test {
-    use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, TimeZone, Utc};
+    use chrono::{DateTime, FixedOffset, Local, TimeZone, Utc};
 
     #[test]
     fn test_date() {
         println!("{}", serde_json::to_string(&Local::now()).unwrap());
         println!("{}", Local::now().format("%Y-%m-%d %H:%M:%S"));
-        let date_time: DateTime<Utc> = Utc.with_ymd_and_hms(2017, 04, 02, 12, 50, 32).unwrap();
+        let date_time: DateTime<Utc> = Utc.with_ymd_and_hms(2017, 4, 2, 12, 50, 32).unwrap();
         let formatted = format!("{}", date_time.format("%d/%m/%Y %H:%M"));
         let local = format!("{}", Local::now().format("%d/%m/%Y %H:%M"));
         let time = Utc::now();
         assert_eq!(formatted, "02/04/2017 12:50");
         println!("{}", time);
         println!("{}", local);
-        let timestamp_millis = NaiveDateTime::from_timestamp_opt(Local::now().timestamp(), 0);
-        println!("{}", timestamp_millis.unwrap());
-        let offset = Local.offset_from_utc_datetime(&timestamp_millis.unwrap());
+        let timestamp = DateTime::from_timestamp(Local::now().timestamp(), 0).unwrap();
+        println!("{}", timestamp);
+        let offset = Local.offset_from_utc_datetime(&timestamp.naive_utc());
         println!("{}", offset);
         println!(
             "{}",

@@ -19,7 +19,7 @@ fn send_benchmark(c: &mut Criterion) {
 fn fetch_benchmark(c: &mut Criterion) {
     let dir = tempdir().unwrap();
     let db = MsgDb::open(dir.path()).unwrap();
-    let to = vec![1];
+    let to = [1];
     let msg = b"hello!";
     for _ in 0..1000 {
         db.messages()

@@ -13,8 +13,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::error;
-use utoipa::{OpenApi, ToSchema};
+use utoipa::ToSchema;
 use validator::Validate;
 
 use crate::app_state::AppState;

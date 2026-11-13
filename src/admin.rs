@@ -1,6 +1,6 @@
 use crate::app_state::AppState;
 use crate::auth::Token;
-use crate::{middleware, Api, Res};
+use crate::{Api, Res, middleware};
 use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};

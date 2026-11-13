@@ -1,7 +1,7 @@
+use axum::Json;
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use color_eyre::eyre::eyre;
 use sea_orm::DbErr;
 use thiserror::Error;
@@ -158,6 +158,19 @@ impl IntoResponse for ServerError {
     }
 }
 
+pub trait ErrPrint: std::fmt::Display {
+    fn print(&self) {
+        let report = eyre!(self.to_string());
+        error!(?report);
+    }
+}
+
+impl ErrPrint for String {}
+
+impl ErrPrint for msg::Error {}
+
+impl ErrPrint for std::io::Error {}
+
 #[cfg(test)]
 mod tests {
     use crate::friend::FriendErr;
@@ -173,23 +186,10 @@ mod tests {
             FriendErr::RequestWaiting.to_string(),
         )
             .into_response();
-        let stream = res.into_body().into_data_stream();
+        let _stream = res.into_body().into_data_stream();
         // TODO 为什么没有返回错误消息
     }
 }
-
-pub trait ErrPrint: std::fmt::Display {
-    fn print(&self) {
-        let report = eyre!(self.to_string());
-        error!(?report);
-    }
-}
-
-impl ErrPrint for String {}
-
-impl ErrPrint for msg::Error {}
-
-impl ErrPrint for std::io::Error {}
 
 // impl ErrPrint for CustomErr{}
 

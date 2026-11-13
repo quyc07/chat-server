@@ -1,6 +1,6 @@
 use chrono::{DateTime, Local, NaiveDateTime, Offset};
 
-/// 自定义 Option<DateTime> 序列化
+/// 自定义 `Option<DateTime>` 序列化
 pub mod opt_native_datetime_format {
     use chrono::NaiveDateTime;
     use serde::{self, Deserialize, Deserializer, Serializer};
@@ -71,7 +71,7 @@ pub mod native_datetime_format {
     }
 }
 
-/// 自定义 Option<DateTime> 序列化
+/// 自定义 `Option<DateTime>` 序列化
 pub mod opt_datetime_format {
     use chrono::{DateTime, Local, Offset};
     use serde::{self, Deserialize, Deserializer, Serializer};
