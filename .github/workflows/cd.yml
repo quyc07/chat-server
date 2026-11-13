@@ -80,7 +80,7 @@ jobs:
 
           ########## create tar.gz ##########
 
-          RELEASE_NAME=${{ matrix.binary-name }}-${GITHUB_REF/refs\/tags\//}-${{ matrix.os-name }}-${{ matrix.architecture }}
+          RELEASE_NAME=${{ matrix.binary-name }}-${{ github.ref_name }}-${{ matrix.os-name }}-${{ matrix.architecture }}
 
           tar czvf "$RELEASE_NAME.tar.gz" "$BINARY_NAME"
 
