@@ -1,5 +1,5 @@
 FROM rust:alpine AS builder
-RUN apk add -q --no-cache build-base openssl-dev perl make
+RUN apk add -q --no-cache build-base openssl-dev curl perl make
 ENV RUSTFLAGS="-C target-feature=-crt-static"
 WORKDIR /usr/src/chat-server
 COPY . .
