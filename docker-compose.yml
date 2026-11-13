@@ -1,18 +1,6 @@
 services:
-  dgraph:
-    image: dgraph/dgraph:latest
-    container_name: dgraph
-    ports:
-      - "8080:8080"
-      - "9080:9080"
-    volumes:
-      - ./volume/dgraph:/graph
-  ratel:
-    image: dgraph/ratel:latest
-    container_name: ratel
-    ports:
-      - "8000:8000"
   chat-server:
+    build: .
     image: chat-server:1.0
     container_name: chat-server
     ports:
@@ -20,4 +8,11 @@ services:
     volumes:
       - ./volume/data:/app/data
     environment:
-      - DGRAPH_URL=http://localhost:8080
+      # compose loads .env from this directory; fail loudly instead of falling
+      # back to the hardcoded key in src/auth.rs.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env or the environment}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
